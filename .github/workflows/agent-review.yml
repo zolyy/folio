@@ -1,0 +1,69 @@
+name: Agent review
+
+# An AI reviewer (Claude) reads every pull request against AGENTS.md and the PR
+# checklist, runs the verification gates, and comments. It needs the repository
+# secret ANTHROPIC_API_KEY. Pull requests from forks get no secrets on the
+# `pull_request` event, so for those a maintainer comments `/agent-review`.
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  review:
+    if: >-
+      (github.event_name == 'pull_request'
+        && !github.event.pull_request.draft
+        && github.event.pull_request.head.repo.full_name == github.repository)
+      || (github.event_name == 'issue_comment'
+        && github.event.issue.pull_request
+        && startsWith(github.event.comment.body, '/agent-review')
+        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+
+            You are the verification agent for Folio, an open-source PDF workbench in pure Rust.
+            Review this pull request. Read AGENTS.md, CLAUDE.md and PLAN.md first; they are the rules.
+
+            Check, citing file and line:
+            1. Never-crash (AGENTS.md §3): no unwrap/expect/panic!/unreachable!/todo! outside tests,
+               no unsafe, no indexing or slicing with numbers that come from input, checked arithmetic,
+               bounded recursion and loops, capped allocations, atomic writes.
+            2. New operations are added to the crate's tests/crash.rs exerciser.
+            3. Tests: new behaviour is tested; a bug fix has a test that would fail without it.
+            4. Parity: parity/acrobat-features.toml is updated, `partial`/`shipped` name real tests,
+               and `notes` honestly say what is missing.
+            5. Provenance (AGENTS.md §1-2): no Adobe assets, no copied GPL/AGPL code, every asset
+               attributed, no downloaded test documents.
+            6. Headless: user-facing features have a `folio` command with --json and never overwrite
+               without --force; no new network access or telemetry.
+            7. Correctness against ISO 32000-2 where the change touches PDF semantics.
+
+            Run `cargo xtask ci` and report its result.
+            Post inline comments for specific problems, then one summary comment with a verdict:
+            ✅ ready for a maintainer, or ❌ changes needed (list them). Be concrete and kind;
+            many contributors are new.
+          claude_args: >-
+            --max-turns 40
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(cargo:*),Read,Glob,Grep"

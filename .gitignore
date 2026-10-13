@@ -1,0 +1,4 @@
+/target
+*.tmp
+/plan/
+.DS_Store

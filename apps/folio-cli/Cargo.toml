@@ -1,0 +1,20 @@
+[package]
+name = "folio-cli"
+description = "Folio command line: the PDF workbench, headless"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "folio"
+path = "src/main.rs"
+
+[dependencies]
+folio-core.workspace = true
+clap.workspace = true
+
+[lints]
+workspace = true

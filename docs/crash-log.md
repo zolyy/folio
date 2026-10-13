@@ -1,0 +1,8 @@
+# Anti-crash gate log
+
+Each stage of PLAN.md closes with `cargo xtask crash --iters N --log "stage N"`,
+which appends a line here only when every mutant passed.
+
+| Date | Stage | Mutants per test | Result |
+|---|---|---|---|
+| 2026-10-13 | Etapa 0 — fundament | 50000 | passed |

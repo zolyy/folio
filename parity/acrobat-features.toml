@@ -1,0 +1,575 @@
+# Parity with Adobe Acrobat Pro — the honest ledger.
+#
+# One [[feature]] per id in PLAN.md section 1. Status is one of:
+#   planned      not started
+#   partial      works for some cases; `notes` says what is missing
+#   shipped      works end to end; still `notes` for known gaps
+#   out-of-scope deliberately not built
+# `partial` and `shipped` must name passing tests in `evidence`.
+# `cargo xtask parity` (part of `cargo xtask ci`) enforces all of this.
+
+[[feature]]
+id = "view.open"
+name = "Deschidere PDF, inclusiv fișiere deteriorate (reparare automată)"
+status = "partial"
+evidence = ["written_documents_read_back", "xref_streams_object_streams_and_png_predictor", "incremental_updates_use_the_newest_objects", "broken_startxref_is_rebuilt_by_scanning", "mutated_documents_do_not_crash"]
+notes = "Opens and repairs classic and compressed (PDF 1.5+) files. Missing: encrypted files (stage 2), display (stages 3-4)."
+
+[[feature]]
+id = "view.render"
+name = "Randare pagini: text, vectori, imagini, transparență, culori"
+status = "planned"
+
+[[feature]]
+id = "view.navigate"
+name = "Navigare pagini, zoom, potrivire lățime/pagină, rotire vizualizare"
+status = "planned"
+
+[[feature]]
+id = "view.layout"
+name = "O pagină / continuu / două pagini / prezentare (full screen)"
+status = "planned"
+
+[[feature]]
+id = "view.thumbnails"
+name = "Panou miniaturi"
+status = "planned"
+
+[[feature]]
+id = "view.bookmarks"
+name = "Semne de carte (outline) — citire și navigare"
+status = "planned"
+
+[[feature]]
+id = "view.search"
+name = "Căutare text, cu evidențiere; căutare avansată în mai multe fișiere"
+status = "planned"
+
+[[feature]]
+id = "view.select-copy"
+name = "Selectare și copiere text / imagine"
+status = "planned"
+
+[[feature]]
+id = "view.layers"
+name = "Straturi (Optional Content Groups) — afișare/ascundere"
+status = "planned"
+
+[[feature]]
+id = "view.attachments"
+name = "Fișiere atașate — listare, extragere"
+status = "planned"
+
+[[feature]]
+id = "view.tabs"
+name = "Mai multe documente în taburi"
+status = "planned"
+
+[[feature]]
+id = "view.night-mode"
+name = "Mod întunecat / culori de citire înlocuite"
+status = "planned"
+
+[[feature]]
+id = "view.read-aloud"
+name = "Citire cu voce tare (TTS al sistemului)"
+status = "planned"
+
+[[feature]]
+id = "view.properties"
+name = "Proprietăți document: metadate, fonturi, versiune, securitate"
+status = "planned"
+
+[[feature]]
+id = "organize.merge"
+name = "Combinare fișiere"
+status = "planned"
+
+[[feature]]
+id = "organize.split"
+name = "Împărțire (la N pagini, pe semne de carte, pe dimensiune)"
+status = "planned"
+
+[[feature]]
+id = "organize.extract"
+name = "Extragere pagini"
+status = "planned"
+
+[[feature]]
+id = "organize.delete"
+name = "Ștergere pagini"
+status = "planned"
+
+[[feature]]
+id = "organize.rotate"
+name = "Rotire pagini"
+status = "planned"
+
+[[feature]]
+id = "organize.reorder"
+name = "Reordonare pagini"
+status = "planned"
+
+[[feature]]
+id = "organize.insert"
+name = "Inserare pagini (din alt PDF, pagină goală)"
+status = "planned"
+
+[[feature]]
+id = "organize.replace"
+name = "Înlocuire pagini"
+status = "planned"
+
+[[feature]]
+id = "organize.crop"
+name = "Decupare pagini (CropBox)"
+status = "planned"
+
+[[feature]]
+id = "organize.page-labels"
+name = "Etichete de pagină (i, ii, 1, 2…)"
+status = "planned"
+
+[[feature]]
+id = "edit.text"
+name = "Editare text existent (reflow în bloc)"
+status = "planned"
+
+[[feature]]
+id = "edit.add-text"
+name = "Adăugare text nou"
+status = "planned"
+
+[[feature]]
+id = "edit.images"
+name = "Adăugare / înlocuire / mutare / decupare imagini"
+status = "planned"
+
+[[feature]]
+id = "edit.links"
+name = "Linkuri (URL, pagină, fișier)"
+status = "planned"
+
+[[feature]]
+id = "edit.header-footer"
+name = "Antet și subsol"
+status = "planned"
+
+[[feature]]
+id = "edit.watermark"
+name = "Filigran"
+status = "planned"
+
+[[feature]]
+id = "edit.background"
+name = "Fundal"
+status = "planned"
+
+[[feature]]
+id = "edit.bates"
+name = "Numerotare Bates"
+status = "planned"
+
+[[feature]]
+id = "edit.bookmarks"
+name = "Creare / editare semne de carte"
+status = "planned"
+
+[[feature]]
+id = "edit.metadata"
+name = "Editare metadate (Info + XMP)"
+status = "planned"
+
+[[feature]]
+id = "comment.note"
+name = "Notă (sticky note)"
+status = "planned"
+
+[[feature]]
+id = "comment.markup"
+name = "Evidențiere, subliniere, tăiere text"
+status = "planned"
+
+[[feature]]
+id = "comment.textbox"
+name = "Casetă text, callout"
+status = "planned"
+
+[[feature]]
+id = "comment.draw"
+name = "Desen: linie, săgeată, dreptunghi, elipsă, poligon, creion"
+status = "planned"
+
+[[feature]]
+id = "comment.stamp"
+name = "Ștampile (proprii, desenate de noi)"
+status = "planned"
+
+[[feature]]
+id = "comment.attach"
+name = "Atașare fișier ca adnotare"
+status = "planned"
+
+[[feature]]
+id = "comment.threads"
+name = "Fire de discuție, răspunsuri, stare (acceptat/respins)"
+status = "planned"
+
+[[feature]]
+id = "comment.list"
+name = "Listă comentarii, filtrare, sortare"
+status = "planned"
+
+[[feature]]
+id = "comment.import-export"
+name = "Import / export FDF și XFDF"
+status = "planned"
+
+[[feature]]
+id = "comment.summary"
+name = "Rezumat comentarii (PDF generat)"
+status = "planned"
+
+[[feature]]
+id = "comment.flatten"
+name = "Aplatizare adnotări în conținut"
+status = "planned"
+
+[[feature]]
+id = "forms.fill"
+name = "Completare câmpuri (text, bife, radio, liste, combo)"
+status = "planned"
+
+[[feature]]
+id = "forms.prepare"
+name = "Creare câmpuri, inclusiv detecție automată"
+status = "planned"
+
+[[feature]]
+id = "forms.appearance"
+name = "Generare aspect câmpuri (appearance streams)"
+status = "planned"
+
+[[feature]]
+id = "forms.calc"
+name = "Calcule, formate, validări (subset sigur de JavaScript, sandbox)"
+status = "planned"
+
+[[feature]]
+id = "forms.data"
+name = "Import / export date: FDF, XFDF, CSV, JSON"
+status = "planned"
+
+[[feature]]
+id = "forms.flatten"
+name = "Aplatizare formular"
+status = "planned"
+
+[[feature]]
+id = "forms.reset"
+name = "Resetare formular"
+status = "planned"
+
+[[feature]]
+id = "sign.fill-sign"
+name = "Semnătură desenată / imagine / inițiale (Fill & Sign)"
+status = "planned"
+
+[[feature]]
+id = "sign.digital"
+name = "Semnătură digitală PAdES (PKCS#12, token PKCS#11)"
+status = "planned"
+
+[[feature]]
+id = "sign.verify"
+name = "Validare semnături, lanț de certificate, revocare (OCSP/CRL)"
+status = "planned"
+
+[[feature]]
+id = "sign.timestamp"
+name = "Marcă temporală RFC 3161"
+status = "planned"
+
+[[feature]]
+id = "sign.ltv"
+name = "Validare pe termen lung (DSS, LTV)"
+status = "planned"
+
+[[feature]]
+id = "sign.certify"
+name = "Certificare document (DocMDP)"
+status = "planned"
+
+[[feature]]
+id = "protect.decrypt"
+name = "Deschidere fișiere criptate (RC4, AES-128, AES-256)"
+status = "planned"
+
+[[feature]]
+id = "protect.encrypt"
+name = "Criptare cu parolă (deschidere + permisiuni)"
+status = "planned"
+
+[[feature]]
+id = "protect.permissions"
+name = "Restricții: tipărire, copiere, editare"
+status = "planned"
+
+[[feature]]
+id = "protect.cert-encrypt"
+name = "Criptare cu certificat"
+status = "planned"
+
+[[feature]]
+id = "protect.redact"
+name = "Redactare reală (eliminare definitivă din conținut)"
+status = "planned"
+
+[[feature]]
+id = "protect.search-redact"
+name = "Căutare și redactare după tipare (CNP, e-mail, IBAN…)"
+status = "planned"
+
+[[feature]]
+id = "protect.sanitize"
+name = "Eliminare informații ascunse (metadate, scripturi, straturi ascunse)"
+status = "planned"
+
+[[feature]]
+id = "create.images"
+name = "PDF din imagini (PNG, JPEG, TIFF)"
+status = "planned"
+
+[[feature]]
+id = "create.blank"
+name = "Document gol"
+status = "planned"
+
+[[feature]]
+id = "create.office"
+name = "PDF din DOCX / XLSX / PPTX (motor propriu de layout)"
+status = "planned"
+
+[[feature]]
+id = "create.html"
+name = "PDF din HTML / pagină web salvată"
+status = "planned"
+
+[[feature]]
+id = "create.text"
+name = "PDF din text simplu / Markdown"
+status = "planned"
+
+[[feature]]
+id = "create.clipboard"
+name = "PDF din clipboard"
+status = "planned"
+
+[[feature]]
+id = "export.images"
+name = "Export pagini ca PNG / JPEG / TIFF"
+status = "planned"
+
+[[feature]]
+id = "export.text"
+name = "Export text (simplu, cu layout)"
+status = "planned"
+
+[[feature]]
+id = "export.html"
+name = "Export HTML"
+status = "planned"
+
+[[feature]]
+id = "export.docx"
+name = "Export Word"
+status = "planned"
+
+[[feature]]
+id = "export.xlsx"
+name = "Export Excel (tabele)"
+status = "planned"
+
+[[feature]]
+id = "export.pptx"
+name = "Export PowerPoint"
+status = "planned"
+
+[[feature]]
+id = "export.extract-images"
+name = "Extragere imagini din document"
+status = "planned"
+
+[[feature]]
+id = "ocr.recognize"
+name = "Recunoaștere text → strat de text invizibil (PDF căutabil)"
+status = "planned"
+
+[[feature]]
+id = "ocr.enhance"
+name = "Îmbunătățire scanări: deskew, curățare fundal, contrast"
+status = "planned"
+
+[[feature]]
+id = "ocr.languages"
+name = "Română, maghiară, engleză + alte limbi"
+status = "planned"
+
+[[feature]]
+id = "optimize.compress"
+name = "Reducere dimensiune (recomprimare stream-uri, eliminare obiecte neutilizate)"
+status = "planned"
+
+[[feature]]
+id = "optimize.images"
+name = "Reeșantionare și recomprimare imagini"
+status = "planned"
+
+[[feature]]
+id = "optimize.fonts"
+name = "Subsetare / eliminare fonturi duplicate"
+status = "planned"
+
+[[feature]]
+id = "optimize.objstm"
+name = "Object streams și xref streams"
+status = "planned"
+
+[[feature]]
+id = "optimize.linearize"
+name = "Fast Web View (linearizare)"
+status = "planned"
+
+[[feature]]
+id = "optimize.audit"
+name = "Audit spațiu (ce ocupă loc)"
+status = "planned"
+
+[[feature]]
+id = "standards.pdfa-validate"
+name = "Validare PDF/A-1/2/3"
+status = "planned"
+
+[[feature]]
+id = "standards.pdfa-convert"
+name = "Conversie la PDF/A"
+status = "planned"
+
+[[feature]]
+id = "standards.pdfx"
+name = "Validare PDF/X"
+status = "planned"
+
+[[feature]]
+id = "standards.pdfua"
+name = "Validare PDF/UA"
+status = "planned"
+
+[[feature]]
+id = "access.check"
+name = "Verificare accesibilitate"
+status = "planned"
+
+[[feature]]
+id = "access.autotag"
+name = "Etichetare automată (tags, ordine de citire)"
+status = "planned"
+
+[[feature]]
+id = "access.alt-text"
+name = "Text alternativ pentru imagini"
+status = "planned"
+
+[[feature]]
+id = "tools.compare"
+name = "Comparare două versiuni (text și vizual)"
+status = "planned"
+
+[[feature]]
+id = "tools.actions"
+name = "Action Wizard: secvențe de pași rulate pe multe fișiere"
+status = "planned"
+
+[[feature]]
+id = "tools.batch"
+name = "Procesare în lot pe foldere"
+status = "planned"
+
+[[feature]]
+id = "tools.measure"
+name = "Măsurare distanță, perimetru, arie (cu scară)"
+status = "planned"
+
+[[feature]]
+id = "tools.index"
+name = "Index de căutare pe colecții de PDF-uri"
+status = "planned"
+
+[[feature]]
+id = "tools.portfolio"
+name = "Portofolii PDF (colecții)"
+status = "planned"
+
+[[feature]]
+id = "tools.print"
+name = "Tipărire, inclusiv broșură și mai multe pagini pe foaie"
+status = "planned"
+
+[[feature]]
+id = "print.preflight"
+name = "Preflight (profile de verificare)"
+status = "planned"
+
+[[feature]]
+id = "print.output-preview"
+name = "Previzualizare separații, acoperire cerneală"
+status = "planned"
+
+[[feature]]
+id = "print.convert-colors"
+name = "Conversie culori (ICC)"
+status = "planned"
+
+[[feature]]
+id = "print.marks"
+name = "Semne de tăiere, bleed"
+status = "planned"
+
+[[feature]]
+id = "print.hairlines"
+name = "Corectare linii prea subțiri"
+status = "planned"
+
+[[feature]]
+id = "media.av"
+name = "Audio / video încorporat (redare externă)"
+status = "planned"
+
+[[feature]]
+id = "media.3d"
+name = "Conținut 3D (doar afișare listă / extragere)"
+status = "planned"
+
+[[feature]]
+id = "agent.cli"
+name = "Fiecare funcție disponibilă în linia de comandă `folio`"
+status = "partial"
+evidence = ["check_reports_a_healthy_file_as_json", "check_repairs_a_damaged_file_and_refuses_to_overwrite"]
+notes = "Only `folio check` so far; every feature gets its command as it ships."
+
+[[feature]]
+id = "agent.json"
+name = "Ieșire JSON pentru orice comandă"
+status = "partial"
+evidence = ["check_reports_a_healthy_file_as_json", "missing_file_is_a_clean_error"]
+notes = "JSON output for `folio check`; follows each new command."
+
+[[feature]]
+id = "agent.mcp"
+name = "Server MCP opțional (pornit doar explicit, doar loopback)"
+status = "planned"
+
+[[feature]]
+id = "agent.script"
+name = "Scripturi de pași (aceleași ca Action Wizard)"
+status = "planned"

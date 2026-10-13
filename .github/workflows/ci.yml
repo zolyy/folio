@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # The verification agent: every gate from `cargo xtask ci`.
+  verify:
+    name: verify (cargo xtask ci)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo xtask ci
+
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  # Developer Certificate of Origin: every commit in a PR is signed off.
+  dco:
+    name: dco
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Every commit has Signed-off-by
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          bad=0
+          for c in $(git rev-list --no-merges "$BASE..$HEAD"); do
+            if ! git show -s --format=%B "$c" | grep -q '^Signed-off-by: '; then
+              echo "::error::commit $(git show -s --format='%h %s' "$c") is not signed off (use git commit -s)"
+              bad=1
+            fi
+          done
+          exit $bad
+
+  # The PR template's checklists must be answered, not skipped.
+  pr-checklist:
+    name: pr-checklist
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: No unchecked boxes in the PR description
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if [ -z "$BODY" ]; then
+            echo "::error::The PR description is empty. Please fill in the template."
+            exit 1
+          fi
+          unchecked=$(printf '%s\n' "$BODY" | grep -E '^\s*- \[ \]' || true)
+          if [ -n "$unchecked" ]; then
+            echo "::error::Unchecked items in the PR description. Check them, or delete lines that truly do not apply:"
+            printf '%s\n' "$unchecked"
+            exit 1
+          fi
+          echo "checklist complete"

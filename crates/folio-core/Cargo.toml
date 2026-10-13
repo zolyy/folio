@@ -1,0 +1,15 @@
+[package]
+name = "folio-core"
+description = "PDF object model, lenient parser, filters and writer for Folio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+miniz_oxide.workspace = true
+
+[lints]
+workspace = true
