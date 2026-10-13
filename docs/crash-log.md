@@ -6,3 +6,4 @@ which appends a line here only when every mutant passed.
 | Date | Stage | Mutants per test | Result |
 |---|---|---|---|
 | 2026-10-13 | Etapa 0 — fundament | 50000 | passed |
+| 2026-10-13 | Etapa 1 — organizare pagini | 30000 | passed |

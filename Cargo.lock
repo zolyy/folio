@@ -110,6 +110,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "folio-core",
+ "folio-ops",
 ]
 
 [[package]]
@@ -117,6 +118,13 @@ name = "folio-core"
 version = "0.1.0"
 dependencies = [
  "miniz_oxide",
+]
+
+[[package]]
+name = "folio-ops"
+version = "0.1.0"
+dependencies = [
+ "folio-core",
 ]
 
 [[package]]

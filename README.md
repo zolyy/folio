@@ -25,8 +25,8 @@ list of Acrobat Pro features and the order they arrive in, and
 | Stage | Scope | State |
 |---|---|---|
 | 0 | Foundation: PDF engine (lenient parser, repair, filters, writer), verification agent | ✅ |
-| 1 | Organize pages + command line (merge, split, rotate, extract, text, metadata…) | next |
-| 2 | Security (decrypt / encrypt) | planned |
+| 1 | Organize pages + command line, faithful to Acrobat's options (combine, split, extract, insert, replace, rotate, crop, page labels, properties, reduce size, text) | ✅ |
+| 2 | Security (decrypt / encrypt) | next |
 | 3 | Rendering engine | planned |
 | 4 | Desktop app | planned |
 | 5–16 | Comments, forms, editing, convert, signatures, redaction, OCR, optimize, PDF/A, tools, print, installers | planned |
@@ -36,10 +36,18 @@ list of Acrobat Pro features and the order they arrive in, and
 ```bash
 git clone https://github.com/zolyy/folio
 cd folio
-cargo run --release -p folio-cli -- check your.pdf
-cargo run --release -p folio-cli -- check broken.pdf --repair fixed.pdf
-cargo run --release -p folio-cli -- --json check your.pdf
+cargo build --release
+./target/release/folio info report.pdf
+./target/release/folio merge -o all.pdf intro.pdf report.pdf:1-3,7
+./target/release/folio split big.pdf --bookmarks
+./target/release/folio rotate scan.pdf --direction ccw --subset even -o fixed.pdf
+./target/release/folio crop doc.pdf --margins 0.5 --unit in -o cropped.pdf
+./target/release/folio labels book.pdf --pages 1-4 --style roman -o book2.pdf
+./target/release/folio --json text report.pdf --pages 2-
 ```
+
+Run `folio --help` and `folio <command> --help` for every option. Each command mirrors an
+Acrobat Pro dialog; the mapping is in [docs/acrobat/organize.md](docs/acrobat/organize.md).
 
 ## How it's built
 
@@ -50,6 +58,8 @@ cargo run --release -p folio-cli -- --json check your.pdf
 - **Never crash.** `unsafe` is forbidden; `unwrap`/`expect`/`panic!` are denied outside
   tests; every stage closes with an **anti-crash gate** that runs every operation on tens
   of thousands of corrupted documents.
+- **`folio-ops`** — organize pages, combine, split, page labels, document properties
+  (Info + XMP), reduce file size and text extraction, each option matching Acrobat Pro.
 - **Headless first.** Every feature is a `folio` command with `--json` output, so scripts
   and AI agents can drive it.
 
