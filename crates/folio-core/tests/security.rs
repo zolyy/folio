@@ -437,9 +437,12 @@ fn qpdf_accepts_folio_encryption() {
         for bits in ["40", "128", "256"] {
             let theirs = dir.join(format!("{compat:?}-qpdf-{bits}.pdf"));
             let mut c2 = std::process::Command::new("qpdf");
-            c2.arg("--password=owner")
-                .arg("--encrypt")
-                .args(["u2", "o2", bits]);
+            c2.arg("--password=owner");
+            if bits == "40" {
+                // qpdf refuses to write RC4 unless asked; Acrobat 3 files still exist.
+                c2.arg("--allow-weak-crypto");
+            }
+            c2.arg("--encrypt").args(["u2", "o2", bits]);
             if bits == "128" {
                 c2.arg("--use-aes=y");
             }

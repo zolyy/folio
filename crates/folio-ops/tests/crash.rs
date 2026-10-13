@@ -13,7 +13,13 @@ use folio_ops::pages::{self, Margins, Orientation, PageBox, Subset};
 use folio_ops::split::{self, SplitBy};
 use folio_ops::{compress, info, meta, outline, ranges, samples, text};
 
-const SLOW: Duration = Duration::from_secs(10);
+/// Unoptimised (debug) builds and slow CI runners get more time; release
+/// builds, which the full gate uses, must stay fast.
+const SLOW: Duration = if cfg!(debug_assertions) {
+    Duration::from_secs(60)
+} else {
+    Duration::from_secs(10)
+};
 
 fn iterations() -> usize {
     std::env::var("FOLIO_CRASH_ITERS")

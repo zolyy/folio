@@ -16,7 +16,13 @@ fn iterations() -> usize {
 
 /// One input may take this long at most (in a release build it is
 /// milliseconds; the margin covers slow CI machines and debug builds).
-const SLOW: Duration = Duration::from_secs(10);
+/// Unoptimised (debug) builds and slow CI runners get more time; release
+/// builds, which the full gate uses, must stay fast.
+const SLOW: Duration = if cfg!(debug_assertions) {
+    Duration::from_secs(60)
+} else {
+    Duration::from_secs(10)
+};
 
 /// Stage 2: protected files at every compatibility level.
 fn encrypted_samples() -> Vec<Vec<u8>> {

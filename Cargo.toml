@@ -32,3 +32,8 @@ unreachable = "deny"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Dependencies (ciphers, hashes, deflate) are optimised even in debug builds:
+# unoptimised AES-256 key derivation is ~30x slower and starves the CI runners.
+[profile.dev.package."*"]
+opt-level = 3
