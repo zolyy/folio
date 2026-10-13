@@ -1,0 +1,15 @@
+[package]
+name = "folio-ops"
+description = "Document operations for Folio, faithful to Acrobat Pro: organize pages, combine, split, page labels, properties, reduce size, text"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+folio-core.workspace = true
+
+[lints]
+workspace = true

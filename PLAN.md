@@ -195,6 +195,19 @@ trece (verificat automat de `cargo xtask parity`).
 
 ---
 
+## 1b. Fidelitate față de Acrobat Pro
+
+Fiecare funcție se construiește **fidel Acrobat Pro**: aceleași opțiuni, aceleași valori
+implicite, același rezultat în fișier. Nu e de ajuns ca „ceva asemănător” să meargă.
+
+- Înainte de implementare, opțiunile funcției din Acrobat se scriu în
+  `docs/acrobat/<grup>.md` (din documentația publică Adobe și observație din exterior,
+  fără capturi de ecran publicate — vezi `AGENTS.md`).
+- Fiecare opțiune devine un parametru în motor și în comanda `folio`, cu un test.
+- În `parity/acrobat-features.toml`, `notes` listează opțiunile Acrobat care **lipsesc**
+  încă. `shipped` = toate opțiunile Acrobat ale funcției există și sunt testate.
+- Diferențele intenționate (de ex. lipsa contului Adobe) se scriu explicit.
+
 ## 2. Arhitectura
 
 ```

@@ -7,6 +7,11 @@ Read `AGENTS.md` first; it wins over this file. The plan and stages are in `PLAN
 - `crates/folio-core` — object model (`object.rs`), lexer, parser, xref loading and
   repair (`xref.rs`), filters, writer, `Document` (page tree, import, prune, atomic save),
   `crashgen` (samples + mutator for the anti-crash gate).
+- `crates/folio-ops` — stage-1 operations: `pages` (rotate/delete/select/insert/replace/
+  crop), `merge`, `split`, `labels`, `outline`, `meta` (Info+XMP), `info`, `compress`,
+  `text`, `ranges`, `samples` (generated test documents).
+- `docs/acrobat/` — Acrobat Pro's options per feature and how Folio maps them. Read it
+  before changing a feature; keep it current.
 - `apps/folio-cli` — the `folio` binary. Every command supports `--json`.
 - `xtask` — the verification agent (`cargo xtask ci|crash|parity|assets|lints`).
 - `parity/acrobat-features.toml` — the honest feature ledger.

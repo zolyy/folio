@@ -78,57 +78,79 @@ status = "planned"
 [[feature]]
 id = "view.properties"
 name = "Proprietăți document: metadate, fonturi, versiune, securitate"
-status = "planned"
+status = "partial"
+evidence = ["properties_show_acrobat_description_and_advanced_fields", "cli_info_shows_document_properties"]
+notes = "Description and Advanced fields via folio info. Missing: custom properties (stage 7), the dialog itself (stage 4)."
 
 [[feature]]
 id = "organize.merge"
 name = "Combinare fișiere"
-status = "planned"
+status = "partial"
+evidence = ["merge_combines_pages_in_order_with_ranges", "merge_adds_a_bookmark_per_file_with_its_own_bookmarks_inside", "cli_merge_with_ranges_and_bookmarks"]
+notes = "Files in order, page range per file, one bookmark per file with its bookmarks nested (named destinations kept). Missing: non-PDF inputs (stage 8), keeping same-named form fields apart (stage 6)."
 
 [[feature]]
 id = "organize.split"
 name = "Împărțire (la N pagini, pe semne de carte, pe dimensiune)"
-status = "planned"
+status = "shipped"
+evidence = ["split_by_number_of_pages", "split_by_file_size_keeps_each_part_under_the_limit", "split_by_top_level_bookmarks_including_named_destinations", "cli_split_three_ways_with_part_names"]
+notes = "All three Acrobat methods, _PartN names, output folder. Folio choice: pages before the first bookmark join the first part."
 
 [[feature]]
 id = "organize.extract"
 name = "Extragere pagini"
-status = "planned"
+status = "shipped"
+evidence = ["extract_keeps_order_and_drops_unused_objects", "cli_extract_separate_and_delete_after"]
+notes = "Range, delete after extracting, separate files. Folio choice of separate file names: <name> <page>.pdf."
 
 [[feature]]
 id = "organize.delete"
 name = "Ștergere pagini"
-status = "planned"
+status = "shipped"
+evidence = ["delete_pages_and_refuse_deleting_all"]
+notes = "Refuses to delete every page, as Acrobat does."
 
 [[feature]]
 id = "organize.rotate"
 name = "Rotire pagini"
-status = "planned"
+status = "shipped"
+evidence = ["rotate_clockwise_counterclockwise_and_180_accumulate", "rotate_even_odd_landscape_portrait_subsets", "cli_delete_rotate_reorder_insert_replace"]
+notes = "Direction, range, even/odd, landscape/portrait. Folio choice: square pages count as portrait."
 
 [[feature]]
 id = "organize.reorder"
 name = "Reordonare pagini"
-status = "planned"
+status = "shipped"
+evidence = ["reverse_and_reorder_every_page_once", "cli_delete_rotate_reorder_insert_replace"]
+notes = "Reverse and explicit order. Drag-and-drop on thumbnails comes with the desktop app (stage 4)."
 
 [[feature]]
 id = "organize.insert"
 name = "Inserare pagini (din alt PDF, pagină goală)"
-status = "planned"
+status = "partial"
+evidence = ["insert_from_file_before_after_first_last", "insert_blank_pages_match_the_neighbouring_page_size"]
+notes = "From file with range, blank pages sized like the neighbour, before/after first/last/N. Missing: from clipboard (stage 4)."
 
 [[feature]]
 id = "organize.replace"
 name = "Înlocuire pagini"
-status = "planned"
+status = "shipped"
+evidence = ["replace_pages_with_pages_of_another_file"]
+notes = "Original range replaced from a start page of another file."
 
 [[feature]]
 id = "organize.crop"
 name = "Decupare pagini (CropBox)"
-status = "planned"
+status = "partial"
+evidence = ["crop_margins_respect_rotation_box_kind_and_reset", "cli_crop_labels_meta_compress_text"]
+notes = "Crop/Art/Trim/Bleed boxes, margins in pt/in/mm/cm relative to the displayed page, range, even/odd, set to zero. Missing: remove white margins (stage 3), change page size (stage 7)."
 
 [[feature]]
 id = "organize.page-labels"
 name = "Etichete de pagină (i, ii, 1, 2…)"
-status = "planned"
+status = "shipped"
+evidence = ["page_labels_new_section_extend_and_survive_reordering", "cli_crop_labels_meta_compress_text"]
+notes = "All styles, prefix, start, extend preceding section; labels follow pages when they move."
 
 [[feature]]
 id = "edit.text"
@@ -178,7 +200,9 @@ status = "planned"
 [[feature]]
 id = "edit.metadata"
 name = "Editare metadate (Info + XMP)"
-status = "planned"
+status = "partial"
+evidence = ["metadata_edit_updates_info_and_xmp"]
+notes = "Title/Author/Subject/Keywords in Info and XMP. Missing: other XMP schemas are regenerated (only PDF/A and PDF/UA ids are kept); custom properties (stage 7)."
 
 [[feature]]
 id = "comment.note"
@@ -373,7 +397,9 @@ status = "planned"
 [[feature]]
 id = "export.text"
 name = "Export text (simplu, cu layout)"
-status = "planned"
+status = "partial"
+evidence = ["text_extraction_handles_kerning_type0_differences_and_forms", "cli_crop_labels_meta_compress_text"]
+notes = "UTF-8/UTF-16, page range, ToUnicode, standard encodings, Differences, Type0, Form XObjects, spacing from positions. Missing: reading order from layout (stage 13), Type3 and embedded-font cmap fallbacks (stage 3)."
 
 [[feature]]
 id = "export.html"
@@ -418,7 +444,9 @@ status = "planned"
 [[feature]]
 id = "optimize.compress"
 name = "Reducere dimensiune (recomprimare stream-uri, eliminare obiecte neutilizate)"
-status = "planned"
+status = "partial"
+evidence = ["reduce_file_size_compresses_streams_and_drops_garbage"]
+notes = "Compresses uncompressed streams, recompresses plain Flate, removes unused objects. Missing: image down-sampling, font subsetting, object streams (stage 12)."
 
 [[feature]]
 id = "optimize.images"
@@ -554,6 +582,8 @@ status = "planned"
 id = "agent.cli"
 name = "Fiecare funcție disponibilă în linia de comandă `folio`"
 status = "partial"
+evidence = ["check_reports_a_healthy_file_as_json", "cli_never_overwrites_without_force", "cli_delete_rotate_reorder_insert_replace"]
+notes = "Commands for every stage 0-1 feature; never overwrites without --force. Grows with each stage."
 evidence = ["check_reports_a_healthy_file_as_json", "check_repairs_a_damaged_file_and_refuses_to_overwrite"]
 notes = "Only `folio check` so far; every feature gets its command as it ships."
 
@@ -561,6 +591,8 @@ notes = "Only `folio check` so far; every feature gets its command as it ships."
 id = "agent.json"
 name = "Ieșire JSON pentru orice comandă"
 status = "partial"
+evidence = ["missing_file_is_a_clean_error", "cli_info_shows_document_properties", "cli_never_overwrites_without_force"]
+notes = "--json on every command so far, including errors. Grows with each stage."
 evidence = ["check_reports_a_healthy_file_as_json", "missing_file_is_a_clean_error"]
 notes = "JSON output for `folio check`; follows each new command."
 
