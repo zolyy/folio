@@ -82,6 +82,10 @@ impl Dict {
         self.entries.iter().map(|(k, v)| (k.as_slice(), v))
     }
 
+    pub fn iter_mut_pairs(&mut self) -> impl Iterator<Item = (&[u8], &mut Object)> {
+        self.entries.iter_mut().map(|(k, v)| (k.as_slice(), v))
+    }
+
     pub fn values_mut(&mut self) -> impl Iterator<Item = &mut Object> {
         self.entries.iter_mut().map(|(_, v)| v)
     }

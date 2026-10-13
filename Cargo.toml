@@ -13,7 +13,7 @@ authors = ["Folio contributors"]
 
 [workspace.dependencies]
 miniz_oxide = "0.8"
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.5", features = ["derive", "env"] }
 folio-core = { path = "crates/folio-core" }
 folio-ops = { path = "crates/folio-ops" }
 

@@ -50,6 +50,9 @@ pub fn write(doc: &Document) -> Result<Vec<u8>> {
         let new = map.get(num).copied().unwrap_or(0);
         let mut obj = obj.clone();
         remap(&mut obj);
+        if let Some(sec) = &doc.security {
+            sec.encrypt_object(new, 0, &mut obj);
+        }
         offsets.push(out.len());
         let _ = writeln!(out, "{new} 0 obj");
         match &mut obj {
@@ -63,6 +66,17 @@ pub fn write(doc: &Document) -> Result<Vec<u8>> {
             other => write_obj(&mut out, other),
         }
         out.extend_from_slice(b"\nendobj\n");
+    }
+
+    // The encryption dictionary itself is written in the clear.
+    let mut encrypt_ref = None;
+    if let Some(sec) = &doc.security {
+        let num = u32::try_from(offsets.len() + 1).unwrap_or(u32::MAX);
+        offsets.push(out.len());
+        let _ = writeln!(out, "{num} 0 obj");
+        write_dict(&mut out, &sec.dict);
+        out.extend_from_slice(b"\nendobj\n");
+        encrypt_ref = Some(num);
     }
 
     let xref_at = out.len();
@@ -80,6 +94,9 @@ pub fn write(doc: &Document) -> Result<Vec<u8>> {
                 trailer.set(key, v);
             }
         }
+    }
+    if let Some(n) = encrypt_ref {
+        trailer.set("Encrypt", Object::Ref(crate::ObjRef::new(n, 0)));
     }
     out.extend_from_slice(b"trailer\n");
     write_dict(&mut out, &trailer);

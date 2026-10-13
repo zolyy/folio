@@ -17,6 +17,7 @@ pub mod outline;
 pub mod pages;
 pub mod ranges;
 pub mod samples;
+pub mod security;
 pub mod split;
 pub mod text;
 

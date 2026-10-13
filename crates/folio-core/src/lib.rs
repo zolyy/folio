@@ -8,6 +8,7 @@
 //! bytes produce an [`Error`] or a recorded repair, never a panic.
 
 pub mod crashgen;
+pub mod crypt;
 pub mod document;
 pub mod error;
 pub mod filters;

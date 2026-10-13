@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
+use crate::crypt::Security;
 use crate::error::{Error, Result};
 use crate::filters::decode_stream;
 use crate::lexer::{Lexer, Token, is_regular, is_ws};
@@ -17,20 +18,41 @@ pub const MAX_OBJECTS: usize = 5_000_000;
 enum Entry {
     Free,
     Offset(usize),
-    InStream { stm: u32, idx: u32 },
+    InStream { stm: u32 },
 }
 
 pub(crate) struct Loaded {
     pub objects: BTreeMap<u32, Object>,
     pub trailer: Dict,
     pub repairs: Vec<String>,
+    pub security: Option<Security>,
 }
 
-pub(crate) fn load(data: &[u8]) -> Result<Loaded> {
+/// Objects read straight from the file, with their generation numbers,
+/// before decryption and before object streams are unpacked.
+type Direct = BTreeMap<u32, (u16, Object)>;
+
+struct Raw {
+    direct: Direct,
+    /// Object stream number -> objects the cross-reference data puts in it.
+    pending: BTreeMap<u32, Vec<u32>>,
+    trailer: Dict,
+    failures: usize,
+}
+
+pub(crate) fn load(data: &[u8], password: &str) -> Result<Loaded> {
     let mut repairs = Vec::new();
-    let via_xref = load_via_xref(data);
-    let (mut objects, mut trailer, failures) = match via_xref {
-        Ok(v) => v,
+    let mut security: Option<Security> = None;
+    let mut enc_num: Option<u32> = None;
+    let (mut objects, mut trailer, failures) = match read_xref(data) {
+        Ok(raw) => {
+            if let Some((s, n)) = open_security(&raw.trailer, &raw.direct, password)? {
+                security = Some(s);
+                enc_num = n;
+            }
+            let (objs, f) = finish(raw.direct, Some(&raw.pending), security.as_ref(), enc_num);
+            (objs, raw.trailer, raw.failures + f)
+        }
         Err(e) => {
             repairs.push(format!(
                 "cross-reference data unusable ({e}); rebuilt by scanning"
@@ -39,30 +61,39 @@ pub(crate) fn load(data: &[u8]) -> Result<Loaded> {
         }
     };
 
-    let root_ok = trailer
-        .get(b"Root")
-        .and_then(Object::as_objref)
-        .is_some_and(|r| objects.contains_key(&r.num));
-    if failures > 0 || !root_ok {
+    let root_ok = |t: &Dict, objs: &BTreeMap<u32, Object>| {
+        t.get(b"Root")
+            .and_then(Object::as_objref)
+            .is_some_and(|r| objs.contains_key(&r.num))
+    };
+    if failures > 0 || !root_ok(&trailer, &objects) {
         if failures > 0 && failures != usize::MAX {
             repairs.push(format!(
                 "{failures} cross-reference entries pointed to the wrong place; rebuilt by scanning"
             ));
-        } else if !root_ok && failures == 0 {
+        } else if failures == 0 {
             repairs.push(
                 "document catalog not reachable from the trailer; rebuilt by scanning".into(),
             );
         }
-        let (scanned, scanned_trailer) = reconstruct(data);
+        let (direct, candidates) = scan(data);
+        if security.is_none()
+            && let Some(t) = candidates.iter().rev().find(|t| t.contains(b"Encrypt"))
+            && let Some((s, n)) = open_security(t, &direct, password)?
+        {
+            security = Some(s);
+            enc_num = n;
+        }
+        let (scanned, _) = finish(direct, None, security.as_ref(), enc_num);
         for (num, obj) in scanned {
             objects.entry(num).or_insert(obj);
         }
-        let still_ok = trailer
-            .get(b"Root")
-            .and_then(Object::as_objref)
-            .is_some_and(|r| objects.contains_key(&r.num));
-        if !still_ok {
-            trailer = scanned_trailer.unwrap_or_default();
+        if !root_ok(&trailer, &objects) {
+            trailer = candidates
+                .into_iter()
+                .rev()
+                .find(|t| root_ok(t, &objects))
+                .unwrap_or_default();
         }
     }
     if objects.is_empty() {
@@ -88,16 +119,113 @@ pub(crate) fn load(data: &[u8]) -> Result<Loaded> {
             }
         }
     }
+    trailer.remove(b"Encrypt");
     Ok(Loaded {
         objects,
         trailer,
         repairs,
+        security,
     })
 }
 
-type XrefResult = (BTreeMap<u32, Object>, Dict, usize);
+/// The security handler named by the trailer, opened with `password`.
+/// Returns it with the number of the /Encrypt object (never decrypted).
+fn open_security(
+    trailer: &Dict,
+    direct: &Direct,
+    password: &str,
+) -> Result<Option<(Security, Option<u32>)>> {
+    let (dict, num) = match trailer.get(b"Encrypt") {
+        None | Some(Object::Null) => return Ok(None),
+        Some(Object::Dict(d)) => (d.clone(), None),
+        Some(Object::Ref(r)) => match direct.get(&r.num).and_then(|(_, o)| o.as_dict()) {
+            Some(d) => (d.clone(), Some(r.num)),
+            None => {
+                return Err(Error::Invalid(
+                    "the file is encrypted but its encryption dictionary is missing".into(),
+                ));
+            }
+        },
+        Some(_) => {
+            return Err(Error::Invalid(
+                "the encryption dictionary of the file is damaged".into(),
+            ));
+        }
+    };
+    let id0 = match trailer.get(b"ID") {
+        Some(Object::Array(a)) => a
+            .first()
+            .and_then(Object::as_str)
+            .unwrap_or_default()
+            .to_vec(),
+        _ => Vec::new(),
+    };
+    Ok(Some((Security::open(&dict, &id0, password)?, num)))
+}
 
-fn load_via_xref(data: &[u8]) -> Result<XrefResult> {
+/// Decrypt the direct objects, then unpack object streams: the ones the
+/// cross-reference data asks for, or (when rebuilding) every one found.
+fn finish(
+    direct: Direct,
+    pending: Option<&BTreeMap<u32, Vec<u32>>>,
+    sec: Option<&Security>,
+    enc_num: Option<u32>,
+) -> (BTreeMap<u32, Object>, usize) {
+    let mut objects = BTreeMap::new();
+    for (num, (generation, mut obj)) in direct {
+        if Some(num) == enc_num {
+            continue;
+        }
+        if let Some(s) = sec {
+            s.decrypt_object(num, generation, &mut obj);
+        }
+        objects.insert(num, obj);
+    }
+    let mut failures = 0usize;
+    match pending {
+        Some(pending) => {
+            for (stm, wanted) in pending {
+                let found = match objects.get(stm) {
+                    Some(Object::Stream(s)) => read_object_stream(s).ok(),
+                    _ => None,
+                };
+                let Some(found) = found else {
+                    failures += wanted.len();
+                    continue;
+                };
+                for num in wanted {
+                    match found.get(num) {
+                        Some(o) => {
+                            objects.insert(*num, o.clone());
+                        }
+                        None => failures += 1,
+                    }
+                }
+            }
+        }
+        None => {
+            let streams: Vec<crate::Stream> = objects
+                .values()
+                .filter_map(|o| match o {
+                    Object::Stream(s) if s.dict.get_name(b"Type") == Some(b"ObjStm") => {
+                        Some(s.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            for s in streams {
+                if let Ok(found) = read_object_stream(&s) {
+                    for (num, o) in found {
+                        objects.entry(num).or_insert(o);
+                    }
+                }
+            }
+        }
+    }
+    (objects, failures)
+}
+
+fn read_xref(data: &[u8]) -> Result<Raw> {
     let start = find_startxref(data)?;
     let mut entries: BTreeMap<u32, Entry> = BTreeMap::new();
     let mut trailer: Option<Dict> = None;
@@ -127,41 +255,27 @@ fn load_via_xref(data: &[u8]) -> Result<XrefResult> {
     }
     let trailer = trailer.ok_or_else(|| Error::parse(start, "no trailer"))?;
 
-    let mut objects = BTreeMap::new();
+    let mut direct = BTreeMap::new();
     let mut failures = 0usize;
-    let mut in_streams: BTreeMap<u32, Vec<(u32, u32)>> = BTreeMap::new();
+    let mut pending: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
     for (&num, &e) in &entries {
         match e {
             Entry::Free => {}
             Entry::Offset(off) => match parse_indirect(data, off) {
                 Ok((id, obj)) if id.num == num => {
-                    objects.insert(num, obj);
+                    direct.insert(num, (id.generation, obj));
                 }
                 _ => failures += 1,
             },
-            Entry::InStream { stm, idx } => in_streams.entry(stm).or_default().push((num, idx)),
+            Entry::InStream { stm, .. } => pending.entry(stm).or_default().push(num),
         }
     }
-    for (stm, wanted) in in_streams {
-        let Some(Object::Stream(s)) = objects.get(&stm) else {
-            failures += wanted.len();
-            continue;
-        };
-        match read_object_stream(s) {
-            Ok(found) => {
-                for (num, _) in wanted {
-                    match found.get(&num) {
-                        Some(o) => {
-                            objects.insert(num, o.clone());
-                        }
-                        None => failures += 1,
-                    }
-                }
-            }
-            Err(_) => failures += wanted.len(),
-        }
-    }
-    Ok((objects, trailer, failures))
+    Ok(Raw {
+        direct,
+        pending,
+        trailer,
+        failures,
+    })
 }
 
 fn merge(entries: &mut BTreeMap<u32, Entry>, sect: Vec<(u32, Entry)>) {
@@ -314,7 +428,7 @@ fn parse_xref_stream(data: &[u8], off: usize) -> Result<(Vec<(u32, Entry)>, Dict
             let e = match kind {
                 1 => usize::try_from(b).map_or(Entry::Free, Entry::Offset),
                 2 => match (u32::try_from(b), u32::try_from(c)) {
-                    (Ok(stm), Ok(idx)) => Entry::InStream { stm, idx },
+                    (Ok(stm), Ok(_)) => Entry::InStream { stm },
                     _ => Entry::Free,
                 },
                 _ => Entry::Free,
@@ -356,9 +470,10 @@ pub(crate) fn read_object_stream(s: &crate::Stream) -> Result<BTreeMap<u32, Obje
 }
 
 /// Rebuild the object table by scanning the whole file for `n g obj`.
-fn reconstruct(data: &[u8]) -> (BTreeMap<u32, Object>, Option<Dict>) {
+/// Returns the objects found and every trailer-like dictionary, oldest first.
+fn scan(data: &[u8]) -> (Direct, Vec<Dict>) {
     let mut objects = BTreeMap::new();
-    let mut xref_dicts: Vec<Dict> = Vec::new();
+    let mut candidates: Vec<Dict> = Vec::new();
     let mut i = 0usize;
     while let Some(at) = find(data, b"obj", i) {
         i = at + 3;
@@ -372,52 +487,24 @@ fn reconstruct(data: &[u8]) -> (BTreeMap<u32, Object>, Option<Dict>) {
             if obj.as_dict().and_then(|d| d.get_name(b"Type")) == Some(b"XRef")
                 && let Some(d) = obj.as_dict()
             {
-                xref_dicts.push(d.clone());
+                candidates.push(d.clone());
             }
             // Later definitions (incremental updates) replace earlier ones.
-            objects.insert(id.num, obj);
+            objects.insert(id.num, (id.generation, obj));
             if objects.len() >= MAX_OBJECTS {
                 break;
             }
         }
     }
-    // Objects packed in object streams.
-    let streams: Vec<crate::Stream> = objects
-        .values()
-        .filter_map(|o| match o {
-            Object::Stream(s) if s.dict.get_name(b"Type") == Some(b"ObjStm") => Some(s.clone()),
-            _ => None,
-        })
-        .collect();
-    for s in streams {
-        if let Ok(found) = read_object_stream(&s) {
-            for (num, o) in found {
-                objects.entry(num).or_insert(o);
-            }
-        }
-    }
-
-    let mut trailer = None;
     let mut j = 0usize;
-    let mut last_trailer = None;
     while let Some(at) = find(data, b"trailer", j) {
         j = at + 7;
         let mut p = Parser::new(data, at + 7);
         if let Ok(Object::Dict(d)) = p.object() {
-            last_trailer = Some(d);
+            candidates.push(d);
         }
     }
-    let valid_root = |d: &Dict| {
-        d.get(b"Root")
-            .and_then(Object::as_objref)
-            .is_some_and(|r| objects.contains_key(&r.num))
-    };
-    if let Some(d) = last_trailer.filter(|d| valid_root(d)) {
-        trailer = Some(d);
-    } else if let Some(d) = xref_dicts.into_iter().rev().find(|d| valid_root(d)) {
-        trailer = Some(d);
-    }
-    (objects, trailer)
+    (objects, candidates)
 }
 
 /// Given the position of `obj`, find where `num gen` begins, if it is there.

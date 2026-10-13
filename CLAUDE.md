@@ -6,7 +6,8 @@ Read `AGENTS.md` first; it wins over this file. The plan and stages are in `PLAN
 
 - `crates/folio-core` — object model (`object.rs`), lexer, parser, xref loading and
   repair (`xref.rs`), filters, writer, `Document` (page tree, import, prune, atomic save),
-  `crashgen` (samples + mutator for the anti-crash gate).
+  `crashgen` (samples + mutator for the anti-crash gate), `crypt` (standard security
+  handler R2-R6; ciphers from RustCrypto, never hand-written except RC4).
 - `crates/folio-ops` — stage-1 operations: `pages` (rotate/delete/select/insert/replace/
   crop), `merge`, `split`, `labels`, `outline`, `meta` (Info+XMP), `info`, `compress`,
   `text`, `ranges`, `samples` (generated test documents).
@@ -33,4 +34,7 @@ record it: `cargo xtask crash --iters 20000 --log "stage N"`.
 - Tests may `unwrap`. Integration test files start with
   `#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]`.
 - New operation? Add it to the crate's `tests/crash.rs` exerciser too.
+- Protected files: open with `Document::load_with_password`; commands call
+  `doc.require(Need::...)` before acting (docs/acrobat/protect.md has the mapping).
+- Interop tests run Poppler/qpdf/Ghostscript only as external processes, and skip when absent.
 - Rust edition 2024 (the newest stable one).

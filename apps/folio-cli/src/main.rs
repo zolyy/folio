@@ -8,12 +8,13 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use folio_core::Document;
+use folio_core::crypt::{Changes, Compat, Need, Printing, Scope, Settings};
 use folio_ops::json;
 use folio_ops::labels::{self, LabelChange, Style};
 use folio_ops::merge::{self, Input};
 use folio_ops::pages::{self, Margins, Orientation, PageBox, Subset};
 use folio_ops::split::{self, SplitBy};
-use folio_ops::{compress, info, meta, ranges, text};
+use folio_ops::{compress, info, meta, ranges, security, text};
 
 #[derive(Parser)]
 #[command(
@@ -25,6 +26,10 @@ struct Cli {
     /// Print machine-readable JSON instead of text.
     #[arg(long, global = true)]
     json: bool,
+    /// Password for protected PDFs (open or permissions password).
+    /// Prefer the FOLIO_PASSWORD environment variable: it stays out of shell history.
+    #[arg(long, global = true, env = "FOLIO_PASSWORD", hide_env_values = true)]
+    password: Option<String>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -99,6 +104,47 @@ enum StyleArg {
 enum Encoding {
     Utf8,
     Utf16,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum CompatArg {
+    /// 40-bit RC4.
+    Acrobat3,
+    /// 128-bit RC4.
+    Acrobat5,
+    /// 128-bit RC4, allows clear metadata.
+    Acrobat6,
+    /// 128-bit AES, allows encrypting only attachments.
+    Acrobat7,
+    /// 256-bit AES (default).
+    Acrobatx,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum ScopeArg {
+    All,
+    ExceptMetadata,
+    Attachments,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum PrintingArg {
+    None,
+    Low,
+    High,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum ChangesArg {
+    None,
+    /// Inserting, deleting, and rotating pages.
+    Pages,
+    /// Filling in form fields and signing existing signature fields.
+    Forms,
+    /// Commenting, filling in form fields, and signing.
+    Comments,
+    /// Any except extracting pages.
+    Any,
 }
 
 #[derive(Subcommand)]
@@ -296,6 +342,41 @@ enum Cmd {
         #[command(flatten)]
         out: Out,
     },
+    /// Show the security settings and the Document Restrictions Summary.
+    Security { file: PathBuf },
+    /// Encrypt with Password (Acrobat's Password Security - Settings).
+    Encrypt {
+        file: PathBuf,
+        #[arg(long, value_enum, default_value = "acrobatx")]
+        compat: CompatArg,
+        /// Which components to encrypt.
+        #[arg(long = "encrypt", value_enum, default_value = "all")]
+        scope: ScopeArg,
+        /// Require a password to open the document.
+        #[arg(long, env = "FOLIO_OPEN_PASSWORD", hide_env_values = true)]
+        open_password: Option<String>,
+        /// Permissions password (required for any restriction).
+        #[arg(long, env = "FOLIO_PERMISSIONS_PASSWORD", hide_env_values = true)]
+        permissions_password: Option<String>,
+        #[arg(long, value_enum, default_value = "high")]
+        printing: PrintingArg,
+        #[arg(long, value_enum, default_value = "any")]
+        changes: ChangesArg,
+        /// Disable copying of text, images, and other content.
+        #[arg(long)]
+        no_copy: bool,
+        /// Disable text access for screen reader devices.
+        #[arg(long)]
+        no_screen_reader: bool,
+        #[command(flatten)]
+        out: Out,
+    },
+    /// Remove security (needs the permissions password if one is set).
+    Decrypt {
+        file: PathBuf,
+        #[command(flatten)]
+        out: Out,
+    },
     /// Save As Text (Plain). Pages are separated by a form feed.
     Text {
         file: PathBuf,
@@ -311,47 +392,103 @@ enum Cmd {
     },
 }
 
+static PASSWORD: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    let _ = PASSWORD.set(cli.password.clone().unwrap_or_default());
     match run(&cli) {
         Ok(code) => code,
-        Err(e) => {
+        Err(f) => {
             if cli.json {
                 println!(
                     "{}",
-                    json::obj(&[("ok", "false".into()), ("error", json::s(&e))])
+                    json::obj(&[
+                        ("ok", "false".into()),
+                        ("error", json::s(&f.msg)),
+                        ("kind", json::s(f.kind())),
+                    ])
                 );
             } else {
-                eprintln!("error: {e}");
+                eprintln!("error: {}", f.msg);
             }
-            ExitCode::from(2)
+            ExitCode::from(f.code)
         }
     }
 }
 
-type Res<T> = Result<T, String>;
+/// A failure and its exit code: 2 = usage or file problem, 3 = password or
+/// permission (the document's security said no).
+struct Fail {
+    msg: String,
+    code: u8,
+}
+
+impl Fail {
+    fn kind(&self) -> &'static str {
+        if self.code == 3 { "security" } else { "error" }
+    }
+}
+
+impl std::fmt::Display for Fail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.msg)
+    }
+}
+
+impl From<String> for Fail {
+    fn from(msg: String) -> Self {
+        Fail { msg, code: 2 }
+    }
+}
+
+impl From<&str> for Fail {
+    fn from(msg: &str) -> Self {
+        Fail {
+            msg: msg.into(),
+            code: 2,
+        }
+    }
+}
+
+fn from_core(e: folio_core::Error, context: Option<&Path>) -> Fail {
+    let code = match e {
+        folio_core::Error::Password(_) | folio_core::Error::Permission(_) => 3,
+        _ => 2,
+    };
+    let msg = match context {
+        Some(p) => format!("{}: {e}", p.display()),
+        None => e.to_string(),
+    };
+    Fail { msg, code }
+}
+
+type Res<T> = Result<T, Fail>;
 
 fn load(p: &Path) -> Res<Document> {
-    Document::load(p).map_err(|e| format!("{}: {e}", p.display()))
+    let pw = PASSWORD.get().map(String::as_str).unwrap_or("");
+    Document::load_with_password(p, pw).map_err(|e| from_core(e, Some(p)))
+}
+
+/// Refuse what the document's security does not allow.
+fn need(doc: &Document, n: Need, p: &Path) -> Res<()> {
+    doc.require(n).map_err(|e| from_core(e, Some(p)))
 }
 
 fn check_free(p: &Path, force: bool) -> Res<()> {
     if p.exists() && !force {
-        return Err(format!(
-            "{} already exists; pass --force to replace it",
-            p.display()
-        ));
+        return Err(format!("{} already exists; pass --force to replace it", p.display()).into());
     }
     Ok(())
 }
 
 fn save(doc: &Document, p: &Path, force: bool) -> Res<()> {
     check_free(p, force)?;
-    doc.save(p).map_err(|e| format!("{}: {e}", p.display()))
+    doc.save(p).map_err(|e| from_core(e, Some(p)))
 }
 
 fn e<T>(r: folio_core::Result<T>) -> Res<T> {
-    r.map_err(|e| e.to_string())
+    r.map_err(|e| from_core(e, None))
 }
 
 fn subset(s: SubsetArg) -> Subset {
@@ -490,12 +627,13 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             for spec in inputs {
                 let (path, range) = split_input(spec);
                 let doc = load(&path)?;
+                need(&doc, Need::Extract, &path)?;
                 let pages = match range {
                     Some(r) => {
                         let n = e(doc.pages())?.len();
                         Some(
                             e(ranges::parse(&r, n))
-                                .map_err(|m| format!("{}: {m}", path.display()))?,
+                                .map_err(|m| Fail::from(format!("{}: {m}", path.display())))?,
                         )
                     }
                     None => None,
@@ -532,6 +670,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             force,
         } => {
             let doc = load(file)?;
+            need(&doc, Need::Extract, file)?;
             let by = match (pages_per_file, max_size, bookmarks) {
                 (Some(n), _, _) => SplitBy::Pages(*n),
                 (_, Some(mb), _) => {
@@ -602,6 +741,10 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             force,
         } => {
             let doc = load(file)?;
+            need(&doc, Need::Extract, file)?;
+            if *delete_after {
+                need(&doc, Need::Assemble, file)?;
+            }
             let n = e(doc.pages())?.len();
             let idx = e(ranges::parse(spec, n))?;
             if *delete_after && !force {
@@ -667,6 +810,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             out,
         } => {
             let mut doc = load(file)?;
+            need(&doc, Need::Assemble, file)?;
             let n = e(doc.pages())?.len();
             let idx = e(ranges::parse(spec, n))?;
             e(pages::delete(&mut doc, &idx))?;
@@ -683,6 +827,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             out,
         } => {
             let mut doc = load(file)?;
+            need(&doc, Need::Assemble, file)?;
             let n = e(doc.pages())?.len();
             let idx = e(ranges::parse(spec, n))?;
             let o = match orientation {
@@ -718,6 +863,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             out,
         } => {
             let mut doc = load(file)?;
+            need(&doc, Need::Assemble, file)?;
             let n = e(doc.pages())?.len();
             let at = match (before, after) {
                 (Some(b), _) => page_word(b, n)?,
@@ -728,6 +874,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
                 e(pages::insert_blank(&mut doc, at, *count))?;
             } else if let Some(src) = from {
                 let other = load(src)?;
+                need(&other, Need::Extract, src)?;
                 let idx = match from_pages {
                     Some(r) => Some(e(ranges::parse(r, e(other.pages())?.len()))?),
                     None => None,
@@ -748,9 +895,11 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             out,
         } => {
             let mut doc = load(file)?;
+            need(&doc, Need::Assemble, file)?;
             let n = e(doc.pages())?.len();
             let idx = e(ranges::parse(spec, n))?;
             let other = load(from)?;
+            need(&other, Need::Extract, from)?;
             if *from_start == 0 {
                 return Err("--from-start counts from 1".into());
             }
@@ -766,6 +915,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             out,
         } => {
             let mut doc = load(file)?;
+            need(&doc, Need::Assemble, file)?;
             let n = e(doc.pages())?.len();
             if *reverse {
                 e(pages::reverse(&mut doc))?;
@@ -789,6 +939,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             out,
         } => {
             let mut doc = load(file)?;
+            need(&doc, Need::Assemble, file)?;
             let n = e(doc.pages())?.len();
             let idx = e(ranges::parse(spec, n))?;
             let idx = e(pages::filter(&doc, &idx, subset(*s), Orientation::Any))?;
@@ -851,6 +1002,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             out,
         } => {
             let mut doc = load(file)?;
+            need(&doc, Need::Assemble, file)?;
             let n = e(doc.pages())?.len();
             let set = e(ranges::parse_set(spec, n))?;
             let (Some(&first), Some(&last)) = (set.first(), set.last()) else {
@@ -926,6 +1078,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             let Some(out) = output else {
                 return Err("editing metadata needs -o/--output".into());
             };
+            need(&doc, Need::Modify, file)?;
             e(meta::update(&mut doc, &u, std::time::SystemTime::now()))?;
             save(&doc, out, *force)?;
             Ok(done(cli, "updated properties", out, &doc, &[]))
@@ -934,6 +1087,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
         Cmd::Compress { file, out } => {
             let before = std::fs::metadata(file).map(|m| m.len()).unwrap_or(0);
             let mut doc = load(file)?;
+            need(&doc, Need::Modify, file)?;
             let r = compress::compress(&mut doc);
             save(&doc, &out.output, out.force)?;
             let after = std::fs::metadata(&out.output).map(|m| m.len()).unwrap_or(0);
@@ -962,6 +1116,90 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
 
+        Cmd::Security { file } => {
+            let doc = load(file)?;
+            let rows = security::summary(&doc);
+            if cli.json {
+                let body = security::to_json(&rows);
+                println!("{{\"ok\":true,{}", body.trim_start_matches('{'));
+            } else {
+                print!("{}", security::to_text(&rows));
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Encrypt {
+            file,
+            compat,
+            scope,
+            open_password,
+            permissions_password,
+            printing,
+            changes,
+            no_copy,
+            no_screen_reader,
+            out,
+        } => {
+            let mut doc = load(file)?;
+            check_free(&out.output, out.force)?;
+            let settings = Settings {
+                compat: match compat {
+                    CompatArg::Acrobat3 => Compat::Acrobat3,
+                    CompatArg::Acrobat5 => Compat::Acrobat5,
+                    CompatArg::Acrobat6 => Compat::Acrobat6,
+                    CompatArg::Acrobat7 => Compat::Acrobat7,
+                    CompatArg::Acrobatx => Compat::AcrobatX,
+                },
+                scope: match scope {
+                    ScopeArg::All => Scope::All,
+                    ScopeArg::ExceptMetadata => Scope::ExceptMetadata,
+                    ScopeArg::Attachments => Scope::AttachmentsOnly,
+                },
+                open_password: open_password.clone(),
+                permissions_password: permissions_password.clone(),
+                printing: match printing {
+                    PrintingArg::None => Printing::None,
+                    PrintingArg::Low => Printing::Low,
+                    PrintingArg::High => Printing::High,
+                },
+                changes: match changes {
+                    ChangesArg::None => Changes::None,
+                    ChangesArg::Pages => Changes::Pages,
+                    ChangesArg::Forms => Changes::Forms,
+                    ChangesArg::Comments => Changes::Comments,
+                    ChangesArg::Any => Changes::Any,
+                },
+                copy: !no_copy,
+                screen_reader: !no_screen_reader,
+            };
+            doc.encrypt(&settings)
+                .map_err(|e| from_core(e, Some(file)))?;
+            save(&doc, &out.output, out.force)?;
+            let method = doc
+                .security
+                .as_ref()
+                .map(|s| s.method())
+                .unwrap_or_default();
+            Ok(done(
+                cli,
+                &format!("encrypted ({method})"),
+                &out.output,
+                &doc,
+                &[("encryption", json::s(&method))],
+            ))
+        }
+
+        Cmd::Decrypt { file, out } => {
+            let mut doc = load(file)?;
+            if doc.security.is_none() {
+                return Err(format!("{} is not protected", file.display()).into());
+            }
+            doc.remove_security()
+                .map_err(|e| from_core(e, Some(file)))?;
+            save(&doc, &out.output, out.force)?;
+            Ok(done(cli, "security removed", &out.output, &doc, &[]))
+        }
+
         Cmd::Text {
             file,
             pages: spec,
@@ -970,6 +1208,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             force,
         } => {
             let doc = load(file)?;
+            need(&doc, Need::Copy, file)?;
             let list = e(doc.pages())?;
             let idx = e(ranges::parse(spec, list.len()))?;
             let mut parts = Vec::new();
@@ -992,7 +1231,8 @@ fn run(cli: &Cli) -> Res<ExitCode> {
                             b
                         }
                     };
-                    std::fs::write(out, bytes).map_err(|e| format!("{}: {e}", out.display()))?;
+                    std::fs::write(out, bytes)
+                        .map_err(|e| Fail::from(format!("{}: {e}", out.display())))?;
                     if cli.json {
                         println!(
                             "{}",

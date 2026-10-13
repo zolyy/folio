@@ -7,3 +7,4 @@ which appends a line here only when every mutant passed.
 |---|---|---|---|
 | 2026-10-13 | Etapa 0 — fundament | 50000 | passed |
 | 2026-10-13 | Etapa 1 — organizare pagini | 30000 | passed |
+| 2026-10-13 | Etapa 2 — securitate | 20000 | passed |
