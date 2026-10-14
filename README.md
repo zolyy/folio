@@ -26,8 +26,8 @@ list of Acrobat Pro features and the order they arrive in, and
 |---|---|---|
 | 0 | Foundation: PDF engine (lenient parser, repair, filters, writer), verification agent | ✅ |
 | 1 | Organize pages + command line, faithful to Acrobat's options (combine, split, extract, insert, replace, rotate, crop, page labels, properties, reduce size, text) | ✅ |
-| 2 | Security (decrypt / encrypt) | next |
-| 3 | Rendering engine | planned |
+| 2 | Security, faithful to Acrobat: open protected files (RC4 40/128, AES-128/256), Encrypt with Password with every option, Restrictions Summary, permissions enforced | ✅ |
+| 3 | Rendering engine | next |
 | 4 | Desktop app | planned |
 | 5–16 | Comments, forms, editing, convert, signatures, redaction, OCR, optimize, PDF/A, tools, print, installers | planned |
 
@@ -44,6 +44,8 @@ cargo build --release
 ./target/release/folio crop doc.pdf --margins 0.5 --unit in -o cropped.pdf
 ./target/release/folio labels book.pdf --pages 1-4 --style roman -o book2.pdf
 ./target/release/folio --json text report.pdf --pages 2-
+./target/release/folio encrypt report.pdf --open-password ... --permissions-password ... --changes pages -o locked.pdf
+FOLIO_PASSWORD=... ./target/release/folio security locked.pdf
 ```
 
 Run `folio --help` and `folio <command> --help` for every option. Each command mirrors an

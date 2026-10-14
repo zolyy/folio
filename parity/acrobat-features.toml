@@ -327,17 +327,23 @@ status = "planned"
 [[feature]]
 id = "protect.decrypt"
 name = "Deschidere fișiere criptate (RC4, AES-128, AES-256)"
-status = "planned"
+status = "shipped"
+evidence = ["open_password_roundtrip_for_every_compatibility_level", "folio_opens_ghostscript_encryption", "saving_keeps_security_like_acrobat", "cli_encrypt_open_and_decrypt_with_passwords", "stage2_encrypted_mutants_do_not_crash"]
+notes = "Standard security handler R2-R6 (RC4 40/128, AES-128/256), open or permissions password, security kept on save, removal needs the permissions password. Certificate security is protect.cert-encrypt."
 
 [[feature]]
 id = "protect.encrypt"
 name = "Criptare cu parolă (deschidere + permisiuni)"
-status = "planned"
+status = "shipped"
+evidence = ["open_password_roundtrip_for_every_compatibility_level", "metadata_can_stay_unencrypted", "attachments_only_leaves_the_document_readable", "acrobat_rules_for_passwords_and_compatibility", "poppler_reads_folio_encryption", "cli_encrypt_follows_acrobat_rules"]
+notes = "Every option of Password Security - Settings: compatibility Acrobat 3/5/6/7/X, components to encrypt, open and permissions passwords, printing, changes allowed, copying, screen readers. Checked against Poppler, qpdf and Ghostscript as external oracles."
 
 [[feature]]
 id = "protect.permissions"
 name = "Restricții: tipărire, copiere, editare"
-status = "planned"
+status = "partial"
+evidence = ["changes_allowed_choices_map_to_commands", "permissions_password_opens_with_full_access_and_restrictions_apply_otherwise", "cli_restrictions_are_enforced_per_command"]
+notes = "Restrictions Summary as in Acrobat; assembly, extraction, changing and copying enforced on every command. Printing, commenting, forms and signing are enforced when those features arrive (stages 5, 6, 9, 14)."
 
 [[feature]]
 id = "protect.cert-encrypt"

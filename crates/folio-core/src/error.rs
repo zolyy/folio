@@ -15,6 +15,10 @@ pub enum Error {
     Unsupported(String),
     /// A request that cannot be satisfied (bad page range, missing object, ...).
     Invalid(String),
+    /// The password is missing or wrong.
+    Password(String),
+    /// The document's security does not allow this without the permissions password.
+    Permission(String),
     /// A safety cap was hit (nesting depth, decoded size, object count).
     Limit(String),
 }
@@ -37,6 +41,8 @@ impl fmt::Display for Error {
             Error::Parse { offset, msg } => write!(f, "parse error at byte {offset}: {msg}"),
             Error::Unsupported(m) => write!(f, "not supported yet: {m}"),
             Error::Invalid(m) => write!(f, "{m}"),
+            Error::Password(m) => write!(f, "{m}"),
+            Error::Permission(m) => write!(f, "{m}"),
             Error::Limit(m) => write!(f, "safety limit reached: {m}"),
         }
     }

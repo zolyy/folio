@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
+use crate::crypt::{Need, Security, Settings, random};
 use crate::error::{Error, Result};
 use crate::filters::flate_encode;
 use crate::object::{Dict, ObjRef, Object, Stream};
@@ -24,6 +25,9 @@ pub struct Document {
     pub trailer: Dict,
     /// What was wrong with the file and how it was repaired, in plain words.
     pub repairs: Vec<String>,
+    /// Password security, kept when the document is saved (as Acrobat does).
+    /// `None` for unprotected documents.
+    pub security: Option<Security>,
 }
 
 impl Document {
@@ -34,6 +38,7 @@ impl Document {
             objects: BTreeMap::new(),
             trailer: Dict::new(),
             repairs: Vec::new(),
+            security: None,
         };
         let mut pages = Dict::new();
         pages.set("Type", Object::name("Pages"));
@@ -49,6 +54,12 @@ impl Document {
     }
 
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
+        Self::load_with_password(path, "")
+    }
+
+    /// Open a file, using `password` if it is protected. Either the open
+    /// (user) password or the permissions (owner) password works.
+    pub fn load_with_password(path: impl AsRef<Path>, password: &str) -> Result<Self> {
         let path = path.as_ref();
         let meta = std::fs::metadata(path)?;
         if meta.len() > MAX_FILE {
@@ -58,10 +69,14 @@ impl Document {
                 MAX_FILE >> 30
             )));
         }
-        Self::from_bytes(&std::fs::read(path)?)
+        Self::from_bytes_with_password(&std::fs::read(path)?, password)
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        Self::from_bytes_with_password(data, "")
+    }
+
+    pub fn from_bytes_with_password(data: &[u8], password: &str) -> Result<Self> {
         let head = data.get(..data.len().min(1024)).unwrap_or_default();
         let version = match find(head, b"%PDF-", 0) {
             Some(p) => data
@@ -74,7 +89,7 @@ impl Document {
                 .collect::<String>(),
             None => String::new(),
         };
-        let loaded = crate::xref::load(data)?;
+        let loaded = crate::xref::load(data, password)?;
         let mut doc = Document {
             version: if version.is_empty() {
                 "1.7".into()
@@ -84,14 +99,10 @@ impl Document {
             objects: loaded.objects,
             trailer: loaded.trailer,
             repairs: loaded.repairs,
+            security: loaded.security,
         };
         if find(head, b"%PDF-", 0).is_none() {
             doc.repairs.push("missing %PDF- header".into());
-        }
-        if doc.trailer.contains(b"Encrypt") {
-            return Err(Error::Unsupported(
-                "encrypted PDFs (decryption arrives in stage 2 of PLAN.md)".into(),
-            ));
         }
         // Normalise generations so references match object numbers alone.
         for o in doc.objects.values_mut() {
@@ -109,6 +120,48 @@ impl Document {
             })
         });
         Ok(doc)
+    }
+
+    /// Refuse an operation the document's security does not allow without
+    /// the permissions password. Unprotected documents allow everything.
+    pub fn require(&self, need: Need) -> Result<()> {
+        match &self.security {
+            Some(s) if !s.allows(need) => Err(Error::Permission(format!(
+                "this document's security does not allow {}; open it with the permissions password",
+                need.describe()
+            ))),
+            _ => Ok(()),
+        }
+    }
+
+    /// Encrypt with password security (Acrobat's Encrypt with Password).
+    /// Changing existing security needs the permissions password.
+    pub fn encrypt(&mut self, settings: &Settings) -> Result<()> {
+        self.require(Need::Owner)?;
+        let id0 = random(16)?;
+        let id = Object::Array(vec![Object::Str(id0.clone()), Object::Str(id0.clone())]);
+        let sec = Security::create(settings, &id0)?;
+        self.trailer.set("ID", id);
+        self.security = Some(sec);
+        Ok(())
+    }
+
+    /// Remove security (Security Method: No Security). When the document
+    /// restricts anything, the permissions password must have been used.
+    pub fn remove_security(&mut self) -> Result<()> {
+        if let Some(s) = &self.security {
+            let restricted = [Need::Assemble, Need::Extract, Need::Modify, Need::Copy]
+                .iter()
+                .any(|&n| !s.allows(n));
+            if restricted && !s.owner_access {
+                return Err(Error::Permission(
+                    "removing security from a restricted document needs the permissions password"
+                        .into(),
+                ));
+            }
+        }
+        self.security = None;
+        Ok(())
     }
 
     pub fn get(&self, r: ObjRef) -> Option<&Object> {
