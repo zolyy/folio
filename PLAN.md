@@ -307,6 +307,20 @@ Rezultatul se notează în `docs/crash-log.md` (data, etapa, număr variante, re
 - Rasterizator propriu cu antialiasing. `folio render --dpi 150` → PNG.
 - Comparare vizuală cu un oracol extern (proces separat) pe un corpus de test.
 
+Sub-etape (fiecare se închide cu propriul test anti-crash):
+- **3a — grafică vectorială:** interpretor de conținut, căi, umplere (nonzero/even-odd),
+  contur (grosime, capete, îmbinări, linii punctate), decupare, stări grafice, Form
+  XObjects, culori Gray/RGB/CMYK/ICC/Indexed/Separation/DeviceN, funcții tip 0/2/3/4,
+  transparență constantă; `folio render` → PNG; comparare cu Poppler (pdftoppm).
+- **3b — imagini:** XObject și inline, Flate/DCT(JPEG)/JPX/JBIG2/CCITT, măști (ImageMask,
+  Mask, SMask), Decode, interpolare.
+- **3c — text:** fonturi TrueType, OpenType/CFF, Type1, Type3, CID, fonturile standard 14
+  înlocuite cu fonturi libere compatibile metric; moduri de randare a textului.
+- **3d — umbriri și transparență completă:** shading tip 1–7, pattern-uri, grupuri de
+  transparență, soft masks, moduri de amestec; aspectul adnotărilor.
+- **3e — export imagine (fidel Acrobat):** PNG/JPEG/TIFF, rezoluție, spațiu de culoare;
+  „Remove white margins” la Crop.
+
 ### Etapa 4 — Aplicația desktop (vizualizare)
 - Fereastră egui/wgpu: taburi, miniaturi, semne de carte, zoom, moduri de afișare,
   căutare cu evidențiere, selectare/copiere, straturi, atașamente, proprietăți, mod întunecat.

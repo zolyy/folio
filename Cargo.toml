@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["crates/folio-core", "crates/folio-ops", "apps/folio-cli", "xtask"]
-default-members = ["crates/folio-core", "crates/folio-ops", "apps/folio-cli"]
+members = ["crates/folio-core", "crates/folio-ops", "crates/folio-render", "apps/folio-cli", "xtask"]
+default-members = ["crates/folio-core", "crates/folio-ops", "crates/folio-render", "apps/folio-cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -16,6 +16,7 @@ miniz_oxide = "0.8"
 clap = { version = "4.5", features = ["derive", "env"] }
 folio-core = { path = "crates/folio-core" }
 folio-ops = { path = "crates/folio-ops" }
+folio-render = { path = "crates/folio-render" }
 
 # Never-crash rules (AGENTS.md §3). Tests may unwrap (see clippy.toml).
 [workspace.lints.rust]

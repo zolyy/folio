@@ -18,7 +18,9 @@ notes = "Opens and repairs classic and compressed (PDF 1.5+) files. Missing: enc
 [[feature]]
 id = "view.render"
 name = "Randare pagini: text, vectori, imagini, transparență, culori"
-status = "planned"
+status = "partial"
+evidence = ["fills_strokes_and_even_odd", "clipping_limits_painting", "colour_spaces_cmyk_separation_devicen", "constant_alpha_from_extgstate", "form_xobjects_use_matrix_and_bbox", "dashed_lines", "page_rotation_and_resolution", "matches_poppler_rendering", "stage3a_mutated_documents_do_not_crash"]
+notes = "Stage 3a: vector graphics, clipping, colour spaces, functions, constant alpha and blend modes, Form XObjects, rotation; matches Poppler within anti-aliasing. Missing: images (3b), text (3c), shadings/patterns/soft masks (3d), ICC colour management (CMYK is converted with the simple formula)."
 
 [[feature]]
 id = "view.navigate"
@@ -398,7 +400,9 @@ status = "planned"
 [[feature]]
 id = "export.images"
 name = "Export pagini ca PNG / JPEG / TIFF"
-status = "planned"
+status = "partial"
+evidence = ["cli_render_writes_png_pages", "page_rotation_and_resolution"]
+notes = "PNG with resolution and page range, smooth line art and thin-line options. Missing: JPEG and TIFF, colour-space choice (stage 3e), and everything 3b-3d adds to the picture."
 
 [[feature]]
 id = "export.text"

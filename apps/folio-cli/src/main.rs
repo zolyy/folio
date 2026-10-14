@@ -342,6 +342,33 @@ enum Cmd {
         #[command(flatten)]
         out: Out,
     },
+    /// Render pages to PNG (Export → Image). Files are `<name>_Page_<n>.png`.
+    Render {
+        file: PathBuf,
+        /// Page range (default: all).
+        #[arg(long, default_value = "")]
+        pages: String,
+        /// Resolution in pixels per inch (Acrobat offers 72–2400).
+        #[arg(long, default_value_t = 150.0)]
+        dpi: f64,
+        /// Output file for a single page (otherwise files go to --out-dir).
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Folder for the images (default: next to the file).
+        #[arg(long)]
+        out_dir: Option<PathBuf>,
+        /// Turn off "Smooth line art".
+        #[arg(long)]
+        no_smooth_line_art: bool,
+        /// Turn off "Enhance thin lines".
+        #[arg(long)]
+        no_enhance_thin_lines: bool,
+        /// Transparent instead of white page background.
+        #[arg(long)]
+        transparent: bool,
+        #[arg(long)]
+        force: bool,
+    },
     /// Show the security settings and the Document Restrictions Summary.
     Security { file: PathBuf },
     /// Encrypt with Password (Acrobat's Password Security - Settings).
@@ -1112,6 +1139,96 @@ fn run(cli: &Cli) -> Res<ExitCode> {
                     r.streams_compressed,
                     r.objects_removed
                 );
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Render {
+            file,
+            pages: spec,
+            dpi,
+            output,
+            out_dir,
+            no_smooth_line_art,
+            no_enhance_thin_lines,
+            transparent,
+            force,
+        } => {
+            let doc = load(file)?;
+            // Exporting page images extracts content, like copying (Folio choice).
+            need(&doc, Need::Copy, file)?;
+            let list = e(doc.pages())?;
+            let idx = e(ranges::parse(spec, list.len()))?;
+            if output.is_some() && idx.len() != 1 {
+                return Err(
+                    "-o/--output takes a single page; use --out-dir for several pages".into(),
+                );
+            }
+            let opts = folio_render::Options {
+                dpi: *dpi,
+                smooth_line_art: !no_smooth_line_art,
+                enhance_thin_lines: !no_enhance_thin_lines,
+                white_background: !transparent,
+            };
+            let dir = dir_of(file, out_dir);
+            let base = stem(file);
+            let targets: Vec<(usize, PathBuf)> = idx
+                .iter()
+                .map(|&i| {
+                    let t = output
+                        .clone()
+                        .unwrap_or_else(|| dir.join(format!("{base}_Page_{}.png", i + 1)));
+                    (i, t)
+                })
+                .collect();
+            for (_, t) in &targets {
+                check_free(t, *force)?;
+            }
+            let mut report = Vec::new();
+            for (i, t) in &targets {
+                let Some(&page) = list.get(*i) else { continue };
+                let r = e(folio_render::render_page(&doc, page, &opts))?;
+                let png = e(r.png())?;
+                std::fs::write(t, png)
+                    .map_err(|err| Fail::from(format!("{}: {err}", t.display())))?;
+                report.push((
+                    i + 1,
+                    t.clone(),
+                    r.pixmap.width(),
+                    r.pixmap.height(),
+                    r.skipped,
+                ));
+            }
+            if cli.json {
+                let files: Vec<String> = report
+                    .iter()
+                    .map(|(n, t, w, h, sk)| {
+                        let skipped: Vec<(&str, String)> =
+                            sk.iter().map(|(k, c)| (*k, c.to_string())).collect();
+                        json::obj(&[
+                            ("page", n.to_string()),
+                            ("file", json::s(&t.display().to_string())),
+                            ("width", w.to_string()),
+                            ("height", h.to_string()),
+                            ("not_drawn_yet", json::obj(&skipped)),
+                        ])
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    json::obj(&[("ok", "true".into()), ("images", json::arr(&files))])
+                );
+            } else {
+                for (n, t, w, h, sk) in &report {
+                    let note = if sk.is_empty() {
+                        String::new()
+                    } else {
+                        let parts: Vec<String> =
+                            sk.iter().map(|(k, c)| format!("{c} {k}")).collect();
+                        format!("  (not drawn yet: {})", parts.join(", "))
+                    };
+                    println!("page {n}: {} ({w} x {h}){note}", t.display());
+                }
             }
             Ok(ExitCode::SUCCESS)
         }
