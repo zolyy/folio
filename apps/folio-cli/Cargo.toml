@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 folio-core.workspace = true
 folio-ops.workspace = true
+folio-render.workspace = true
 clap.workspace = true
 
 [lints]

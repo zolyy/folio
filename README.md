@@ -27,7 +27,7 @@ list of Acrobat Pro features and the order they arrive in, and
 | 0 | Foundation: PDF engine (lenient parser, repair, filters, writer), verification agent | ✅ |
 | 1 | Organize pages + command line, faithful to Acrobat's options (combine, split, extract, insert, replace, rotate, crop, page labels, properties, reduce size, text) | ✅ |
 | 2 | Security, faithful to Acrobat: open protected files (RC4 40/128, AES-128/256), Encrypt with Password with every option, Restrictions Summary, permissions enforced | ✅ |
-| 3 | Rendering engine | next |
+| 3 | Rendering engine — 3a vector graphics ✅ (paths, clipping, colour spaces, functions, transparency, forms; matches Poppler); 3b images, 3c text, 3d shadings, 3e image export | in progress |
 | 4 | Desktop app | planned |
 | 5–16 | Comments, forms, editing, convert, signatures, redaction, OCR, optimize, PDF/A, tools, print, installers | planned |
 
@@ -46,6 +46,7 @@ cargo build --release
 ./target/release/folio --json text report.pdf --pages 2-
 ./target/release/folio encrypt report.pdf --open-password ... --permissions-password ... --changes pages -o locked.pdf
 FOLIO_PASSWORD=... ./target/release/folio security locked.pdf
+./target/release/folio render report.pdf --pages 1 --dpi 150 -o page1.png
 ```
 
 Run `folio --help` and `folio <command> --help` for every option. Each command mirrors an
@@ -62,6 +63,8 @@ Acrobat Pro dialog; the mapping is in [docs/acrobat/organize.md](docs/acrobat/or
   of thousands of corrupted documents.
 - **`folio-ops`** — organize pages, combine, split, page labels, document properties
   (Info + XMP), reduce file size and text extraction, each option matching Acrobat Pro.
+- **`folio-render`** — the content-stream interpreter, graphics state, colour spaces and
+  PDF functions, rasterised with tiny-skia; checked against Poppler in tests.
 - **Headless first.** Every feature is a `folio` command with `--json` output, so scripts
   and AI agents can drive it.
 
