@@ -14,7 +14,11 @@ brings it, **Folio choice** = not documented publicly.
 | Functions type 0, 2, 3, 4 (PostScript calculator) | ✔ 3a |
 | Constant alpha (`CA`/`ca`) and blend modes from ExtGState | ✔ 3a |
 | Page rotation, CropBox clipped to MediaBox | ✔ 3a |
-| Images and inline images, image masks, soft masks in images | 3b |
+| Images and inline images: 1/2/4/8/16-bit, Decode arrays, every colour space | ✔ 3b |
+| JPEG (DCT, incl. Adobe CMYK), CCITT Group 3/4 fax | ✔ 3b, tested with real encoded data |
+| JPEG 2000 (JPX, incl. SMaskInData), JBIG2 (with globals) | ✔ 3b, decoded by hayro; covered by the anti-crash gate, no generated samples yet |
+| Stencil masks (ImageMask), colour-key masks, explicit masks, soft masks (SMask) | ✔ 3b |
+| Image smoothing: smooth when shrinking, crisp when enlarging unless /Interpolate | ✔ 3b |
 | Text and fonts | 3c |
 | Shadings, patterns, transparency groups, soft masks | 3d |
 | ICC colour management (CMYK through a press profile, as Acrobat does) | later (print.convert-colors); Folio converts DeviceCMYK with the simple formula until then, so CMYK colours look brighter than in Acrobat |
@@ -26,7 +30,8 @@ brings it, **Folio choice** = not documented publicly.
 |---|---|
 | Smooth line art | ✔ on by default; `--no-smooth-line-art` |
 | Enhance thin lines | ✔ on by default; `--no-enhance-thin-lines` |
-| Smooth text, Smooth images | 3c, 3b |
+| Smooth images | ✔ on by default; `--no-smooth-images` |
+| Smooth text | 3c |
 | Resolution | ✔ `--dpi` |
 
 ## export.images — Export PDF → Image
