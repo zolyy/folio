@@ -363,6 +363,9 @@ enum Cmd {
         /// Turn off "Enhance thin lines".
         #[arg(long)]
         no_enhance_thin_lines: bool,
+        /// Turn off "Smooth images".
+        #[arg(long)]
+        no_smooth_images: bool,
         /// Transparent instead of white page background.
         #[arg(long)]
         transparent: bool,
@@ -1151,6 +1154,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             out_dir,
             no_smooth_line_art,
             no_enhance_thin_lines,
+            no_smooth_images,
             transparent,
             force,
         } => {
@@ -1168,6 +1172,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
                 dpi: *dpi,
                 smooth_line_art: !no_smooth_line_art,
                 enhance_thin_lines: !no_enhance_thin_lines,
+                smooth_images: !no_smooth_images,
                 white_background: !transparent,
             };
             let dir = dir_of(file, out_dir);

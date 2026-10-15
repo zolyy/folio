@@ -1,7 +1,7 @@
 //! The content-stream interpreter (ISO 32000-2 §8): graphics state, paths,
 //! painting, clipping, colour operators and Form XObjects.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 
 use folio_core::filters::decode_stream;
@@ -9,8 +9,8 @@ use folio_core::lexer::Token;
 use folio_core::parser::Parser;
 use folio_core::{Dict, Document, Error, ObjRef, Object, Result};
 use tiny_skia::{
-    BlendMode, Color, FillRule, LineCap, LineJoin, Mask, Paint, PathBuilder, Pixmap, Stroke,
-    StrokeDash, Transform,
+    BlendMode, Color, FillRule, FilterQuality, LineCap, LineJoin, Mask, Paint, PathBuilder,
+    Pattern, Pixmap, SpreadMode, Stroke, StrokeDash, Transform,
 };
 
 use crate::color::ColorSpace;
@@ -21,6 +21,8 @@ const MAX_OPS: usize = 2_000_000;
 /// Nesting of q/Q and of Form XObjects.
 const MAX_STACK: usize = 256;
 const MAX_FORM_DEPTH: usize = 16;
+/// Decoded image pixels per page (repeated huge images are refused).
+const MAX_PAGE_IMAGE_PIXELS: u64 = 400_000_000;
 /// Path segments per path.
 const MAX_SEGMENTS: usize = 1_000_000;
 
@@ -158,6 +160,8 @@ struct Ctx<'a> {
     ops: usize,
     skipped: BTreeMap<&'static str, usize>,
     forms_active: HashSet<u32>,
+    images: HashMap<u32, Rc<Pixmap>>,
+    image_pixels: u64,
 }
 
 pub(crate) fn render(doc: &Document, page: ObjRef, opts: &Options) -> Result<Rendered> {
@@ -178,6 +182,8 @@ pub(crate) fn render(doc: &Document, page: ObjRef, opts: &Options) -> Result<Ren
         ops: 0,
         skipped: BTreeMap::new(),
         forms_active: HashSet::new(),
+        images: HashMap::new(),
+        image_pixels: 0,
     };
     let res = doc
         .page_attr(page, b"Resources")
@@ -429,15 +435,42 @@ impl Ctx<'_> {
                     }
                 }
                 b"BI" => {
+                    // Inline image: abbreviated dictionary, `ID`, data, `EI`.
+                    let mut d = Dict::new();
+                    let mut ok = false;
                     loop {
+                        let at = p.lex.pos;
                         match p.lex.token() {
-                            Ok(Some(Token::Keyword(k))) if k == b"ID" => break,
-                            Ok(Some(_)) => continue,
+                            Ok(Some(Token::Keyword(k))) if k == b"ID" => {
+                                ok = true;
+                                break;
+                            }
+                            Ok(Some(Token::Obj(Object::Name(k)))) => {
+                                let vat = p.lex.pos;
+                                match p.lex.token() {
+                                    Ok(Some(t)) => match p.from_token(t, 0, vat) {
+                                        Ok(v) if d.len() < 64 => d.set(k, v),
+                                        Ok(_) => {}
+                                        Err(_) => break,
+                                    },
+                                    _ => break,
+                                }
+                            }
+                            Ok(Some(_)) => {
+                                let _ = at;
+                            }
                             _ => break,
                         }
                     }
-                    p.lex.skip_inline_image_data();
-                    self.skip("image");
+                    if !ok {
+                        break;
+                    }
+                    let data_start = p.lex.pos + 1;
+                    let end = inline_image_end(p.lex.data(), data_start, &d, self.doc, res);
+                    let image = p.lex.data().get(data_start..end.0).unwrap_or_default();
+                    let image = image.to_vec();
+                    p.lex.pos = end.1;
+                    self.draw_image_dict(&d, &image, res, &gs, None);
                 }
                 b"sh" => self.skip("shading"),
                 b"Tj" | b"TJ" | b"'" | b"\"" => self.skip("text"),
@@ -614,6 +647,88 @@ impl Ctx<'_> {
         }
     }
 
+    /// Decode (or take from the cache) and draw an image in the unit square.
+    fn draw_image_dict(
+        &mut self,
+        dict: &Dict,
+        data: &[u8],
+        res: &Dict,
+        gs: &GState,
+        cache_key: Option<u32>,
+    ) {
+        let doc = self.doc;
+        let is_mask = matches!(
+            dict.get(b"ImageMask").or_else(|| dict.get(b"IM")),
+            Some(Object::Bool(true))
+        );
+        // Stencil masks take the current fill colour, so they are not cached.
+        let cached = cache_key
+            .filter(|_| !is_mask)
+            .and_then(|k| self.images.get(&k).cloned());
+        let img = match cached {
+            Some(img) => img,
+            None => {
+                let fill = match self.color(&gs.fill_cs.clone(), &gs.fill, 1.0) {
+                    Some(c) => [c.red(), c.green(), c.blue(), c.alpha()],
+                    None => return,
+                };
+                if self.image_pixels > MAX_PAGE_IMAGE_PIXELS {
+                    self.skip("images beyond the per-page limit");
+                    return;
+                }
+                match crate::image::decode(doc, dict, data, Some(res), fill) {
+                    Ok(p) => {
+                        self.image_pixels += u64::from(p.width()) * u64::from(p.height());
+                        let p = Rc::new(p);
+                        if let Some(k) = cache_key.filter(|_| !is_mask) {
+                            self.images.insert(k, p.clone());
+                        }
+                        p
+                    }
+                    Err(_) => {
+                        self.skip("undecodable image");
+                        return;
+                    }
+                }
+            }
+        };
+        let (w, h) = (img.width() as f32, img.height() as f32);
+        // Image space: the unit square, with the first row at the top.
+        let t = gs
+            .ctm
+            .pre_concat(Transform::from_row(1.0 / w, 0.0, 0.0, -1.0 / h, 0.0, 1.0));
+        // Smooth when shrinking; keep pixels crisp when enlarging unless the
+        // image asks for interpolation (as Acrobat does).
+        let device_w = (gs.ctm.sx.hypot(gs.ctm.ky)).abs();
+        let interpolate = matches!(
+            dict.get(b"Interpolate").or_else(|| dict.get(b"I")),
+            Some(Object::Bool(true))
+        );
+        let quality = if !self.opts.smooth_images {
+            FilterQuality::Nearest
+        } else if device_w < w || interpolate {
+            FilterQuality::Bilinear
+        } else {
+            FilterQuality::Nearest
+        };
+        let shader = Pattern::new(
+            Pixmap::as_ref(&img),
+            SpreadMode::Pad,
+            quality,
+            gs.fill_alpha.clamp(0.0, 1.0),
+            Transform::identity(),
+        );
+        let paint = Paint {
+            shader,
+            blend_mode: gs.blend,
+            anti_alias: self.opts.smooth_images,
+            ..Paint::default()
+        };
+        if let Some(rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, w, h) {
+            self.pixmap.fill_rect(rect, &paint, t, gs.clip.as_deref());
+        }
+    }
+
     fn xobject(&mut self, res: &Dict, name: &[u8], gs: &GState, depth: usize) {
         let doc = self.doc;
         let Some(r) = doc
@@ -629,7 +744,8 @@ impl Ctx<'_> {
         };
         match s.dict.get_name(b"Subtype") {
             Some(b"Image") => {
-                self.skip("image");
+                let (dict, data) = (s.dict.clone(), s.data.clone());
+                self.draw_image_dict(&dict, &data, res, gs, Some(r.num));
                 return;
             }
             Some(b"Form") => {}
@@ -677,4 +793,60 @@ impl Ctx<'_> {
         }
         self.forms_active.remove(&r.num);
     }
+}
+
+/// Where an inline image's data ends, and where parsing resumes after `EI`.
+fn inline_image_end(
+    data: &[u8],
+    start: usize,
+    d: &Dict,
+    doc: &Document,
+    res: &Dict,
+) -> (usize, usize) {
+    use folio_core::lexer::{is_regular, is_ws};
+    let get = |a: &[u8], b: &[u8]| d.get(a).or_else(|| d.get(b));
+    if get(b"Filter", b"F").is_none() {
+        let int =
+            |a: &[u8], b: &[u8]| get(a, b).and_then(Object::as_int).unwrap_or(0).max(0) as usize;
+        let mask = matches!(get(b"ImageMask", b"IM"), Some(Object::Bool(true)));
+        let bpc = if mask {
+            1
+        } else {
+            int(b"BitsPerComponent", b"BPC").max(1)
+        };
+        let comps = if mask {
+            1
+        } else {
+            get(b"ColorSpace", b"CS")
+                .and_then(|o| ColorSpace::parse(doc, o, Some(res)))
+                .map(|c| c.components())
+                .unwrap_or(1)
+        };
+        let row = int(b"Width", b"W")
+            .saturating_mul(comps)
+            .saturating_mul(bpc)
+            .div_ceil(8);
+        let len = row.saturating_mul(int(b"Height", b"H"));
+        let end = start.saturating_add(len);
+        let mut q = end;
+        while data.get(q).copied().is_some_and(is_ws) {
+            q += 1;
+        }
+        if end <= data.len() && data.get(q..q + 2) == Some(b"EI") {
+            return (end, q + 2);
+        }
+    }
+    let mut i = start;
+    while i + 1 < data.len() {
+        if data.get(i) == Some(&b'E')
+            && data.get(i + 1) == Some(&b'I')
+            && i > start
+            && data.get(i - 1).copied().is_some_and(is_ws)
+            && data.get(i + 2).is_none_or(|&b| !is_regular(b))
+        {
+            return (i - 1, i + 2);
+        }
+        i += 1;
+    }
+    (data.len(), data.len())
 }

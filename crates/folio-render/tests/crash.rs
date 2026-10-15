@@ -3,6 +3,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+mod common;
+
 use std::time::{Duration, Instant};
 
 use folio_core::crashgen::{Rng, core_samples, mutate, nasty_inputs};
@@ -117,6 +119,7 @@ fn stage3a_mutated_documents_do_not_crash() {
     let mut bases = core_samples();
     bases.push(samples::vector().unwrap().to_bytes().unwrap());
     bases.push(samples::vector_uncompressed().unwrap().to_bytes().unwrap());
+    bases.push(common::image_sample().to_bytes().unwrap());
     let n = iterations();
     let mut rng = Rng::new(0x5EED_F011_0000_003A);
     let mut worst = Duration::ZERO;
@@ -140,5 +143,131 @@ fn stage3a_mutated_documents_do_not_crash() {
             );
         }
     }
-    eprintln!("stage 3a anti-crash: {n} mutants rendered at 2 resolutions, slowest {worst:?}");
+    eprintln!(
+        "stage 3 anti-crash (vector + images): {n} mutants rendered at 2 resolutions, slowest {worst:?}"
+    );
+}
+
+/// Hostile image dictionaries and data for every decoder.
+#[test]
+fn stage3b_hostile_images_do_not_crash() {
+    use common::{image_stream, int, name};
+    use folio_core::Object;
+    let mut rng = Rng::new(0x5EED_F011_0000_003B);
+    let mut junk = |n: usize| -> Vec<u8> { (0..n).map(|_| rng.next_u64() as u8).collect() };
+    type Case<'a> = (Vec<(&'a str, Object)>, Vec<u8>);
+    let cases: Vec<Case> = vec![
+        (
+            vec![
+                ("Width", int(100_000)),
+                ("Height", int(100_000)),
+                ("BitsPerComponent", int(8)),
+            ],
+            vec![0; 16],
+        ),
+        (vec![("Width", int(-3)), ("Height", int(2))], vec![]),
+        (
+            vec![
+                ("Width", int(4)),
+                ("Height", int(4)),
+                ("BitsPerComponent", int(3)),
+            ],
+            vec![0; 16],
+        ),
+        (
+            vec![
+                ("Width", int(4)),
+                ("Height", int(4)),
+                ("BitsPerComponent", int(8)),
+                ("Decode", Object::Array(vec![Object::Real(f64::NAN)])),
+            ],
+            vec![],
+        ),
+        (
+            vec![
+                ("Width", int(64)),
+                ("Height", int(64)),
+                ("Filter", name("DCTDecode")),
+            ],
+            junk(500),
+        ),
+        (
+            vec![
+                ("Width", int(64)),
+                ("Height", int(64)),
+                ("Filter", name("JPXDecode")),
+            ],
+            junk(500),
+        ),
+        (
+            vec![
+                ("Width", int(64)),
+                ("Height", int(64)),
+                ("Filter", name("JBIG2Decode")),
+            ],
+            junk(500),
+        ),
+        (
+            vec![
+                ("Width", int(64)),
+                ("Height", int(64)),
+                ("Filter", name("CCITTFaxDecode")),
+            ],
+            junk(500),
+        ),
+        (
+            vec![
+                ("Width", int(64)),
+                ("Height", int(64)),
+                ("ImageMask", Object::Bool(true)),
+                ("Filter", name("CCITTFaxDecode")),
+            ],
+            junk(64),
+        ),
+        (
+            vec![
+                ("Width", int(2)),
+                ("Height", int(2)),
+                (
+                    "ColorSpace",
+                    Object::Array(vec![
+                        name("Indexed"),
+                        name("DeviceRGB"),
+                        int(255),
+                        Object::Str(vec![1]),
+                    ]),
+                ),
+            ],
+            vec![255; 4],
+        ),
+        (
+            vec![
+                ("Width", int(2)),
+                ("Height", int(2)),
+                ("Mask", Object::Array(vec![int(-1)])),
+            ],
+            vec![0; 4],
+        ),
+    ];
+    for (i, (dict, data)) in cases.into_iter().enumerate() {
+        let mut doc = Document::new();
+        let x = doc.add(image_stream(&dict, data));
+        let mut xo = Dict::new();
+        xo.set("X", x.into());
+        let mut res = Dict::new();
+        res.set("XObject", xo.into());
+        doc.add_page(
+            [200.0, 200.0],
+            b"q 100 0 0 100 0 0 cm /X Do Q BI /W 99999 /H 99999 /F /DCT ID xx EI",
+            res,
+        )
+        .unwrap();
+        let t = Instant::now();
+        exercise_render(&doc.to_bytes().unwrap());
+        assert!(
+            t.elapsed() < SLOW,
+            "hostile image {i} took {:?}",
+            t.elapsed()
+        );
+    }
 }

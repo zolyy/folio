@@ -10,6 +10,7 @@
 
 pub mod color;
 pub mod function;
+pub mod image;
 mod interp;
 pub mod samples;
 
@@ -28,6 +29,8 @@ pub struct Options {
     pub smooth_line_art: bool,
     /// "Enhance thin lines": strokes thinner than a pixel are drawn one pixel wide.
     pub enhance_thin_lines: bool,
+    /// "Smooth images".
+    pub smooth_images: bool,
     /// Paint the page white first (off = transparent background).
     pub white_background: bool,
 }
@@ -38,6 +41,7 @@ impl Default for Options {
             dpi: 72.0,
             smooth_line_art: true,
             enhance_thin_lines: true,
+            smooth_images: true,
             white_background: true,
         }
     }
