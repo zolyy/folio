@@ -132,10 +132,42 @@ fn text_matches_poppler() {
         })
         .count();
     let share = differing as f64 / total as f64;
+    // Name the glyphs that differ, so a failure says which font kind it is.
+    let width = theirs.width() as usize;
+    let regions = [
+        ("TrueType A", 50.0, 650.0),
+        ("TrueType B", 120.0, 650.0),
+        ("CFF", 50.0, 500.0),
+        ("Type 1", 50.0, 350.0),
+        ("Type 3", 50.0, 200.0),
+        ("stroke mode", 300.0, 650.0),
+        ("clip mode", 300.0, 500.0),
+        ("Type 0", 300.0, 350.0),
+    ];
+    let mut report = Vec::new();
+    for (name, ox, oy) in regions {
+        let (x0, x1) = (ox as usize, ox as usize + 80);
+        let (y0, y1) = ((792.0 - oy - 75.0) as usize, (792.0 - oy + 5.0) as usize);
+        let n = (y0..y1)
+            .flat_map(|y| (x0..x1).map(move |x| y * width + x))
+            .filter(|&i| {
+                let (Some(a), Some(b)) = (ours.pixmap.pixels().get(i), theirs.pixels().get(i))
+                else {
+                    return false;
+                };
+                let (a, b) = (a.demultiply(), b.demultiply());
+                a.red().abs_diff(b.red()) > 60 || a.green().abs_diff(b.green()) > 60
+            })
+            .count();
+        if n > 50 {
+            report.push(format!("{name}: {n} pixels"));
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
     assert!(
         share < 0.002,
-        "{differing} of {total} pixels differ from Poppler ({:.3}%)",
-        share * 100.0
+        "{differing} of {total} pixels differ from Poppler ({:.3}%): {}",
+        share * 100.0,
+        report.join(", ")
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -393,13 +393,16 @@ pub fn tiny_type1() -> Vec<u8> {
         encrypt(&p, 4330)
     };
     let (a, n) = (cs(&a), cs(&notdef));
-    let mut private = b"\0\0\0\0dup /Private 8 dict dup begin /lenIV 4 def /Subrs 0 array\n/CharStrings 2 dict dup begin\n".to_vec();
+    // Laid out as the Type 1 specification shows, so strict readers accept it.
+    let mut private = b"\0\0\0\0dup /Private 12 dict dup begin\n/RD{string currentfile exch readstring pop}executeonly def\n/ND{noaccess def}executeonly def\n/NP{noaccess put}executeonly def\n/BlueValues [] def\n/MinFeature {16 16} def\n/password 5839 def\n/lenIV 4 def\n/Subrs 0 array\n/CharStrings 2 dict dup begin\n".to_vec();
     private.extend_from_slice(format!("/.notdef {} RD ", n.len()).as_bytes());
     private.extend_from_slice(&n);
     private.extend_from_slice(format!(" ND\n/A {} RD ", a.len()).as_bytes());
     private.extend_from_slice(&a);
-    private.extend_from_slice(b" ND\nend end\nmark currentfile closefile\n");
-    let mut out = b"%!PS-AdobeFont-1.0: FolioT1\n/FontMatrix [0.001 0 0 0.001 0 0] readonly def\n/Encoding StandardEncoding def\ncurrentfile eexec\n".to_vec();
+    private.extend_from_slice(
+        b" ND\nend\nend\nreadonly put\nnoaccess put\ndup /FontName get exch definefont pop\nmark currentfile closefile\n",
+    );
+    let mut out = b"%!PS-AdobeFont-1.0: FolioT1 001.000\n12 dict begin\n/FontInfo 2 dict dup begin\n/version (001.000) readonly def\n/FullName (Folio T1) readonly def\nend readonly def\n/FontName /FolioT1 def\n/PaintType 0 def\n/FontType 1 def\n/FontMatrix [0.001 0 0 0.001 0 0] readonly def\n/Encoding StandardEncoding def\n/FontBBox {0 0 700 700} readonly def\ncurrentdict end\ncurrentfile eexec\n".to_vec();
     out.extend(encrypt(&private, 55665));
     out
 }
@@ -414,6 +417,13 @@ fn font_file(doc: &mut Document, key: &str, data: Vec<u8>, subtype: Option<&str>
     desc.set("Type", Object::name("FontDescriptor"));
     desc.set("FontName", Object::name("FolioTest"));
     desc.set("Flags", Object::Int(32));
+    // The entries ISO 32000-2 Table 120 requires, so strict readers accept it.
+    desc.set("FontBBox", rect([0.0, 0.0, 700.0, 700.0]));
+    desc.set("ItalicAngle", Object::Int(0));
+    desc.set("Ascent", Object::Int(700));
+    desc.set("Descent", Object::Int(0));
+    desc.set("CapHeight", Object::Int(700));
+    desc.set("StemV", Object::Int(80));
     desc.set(key, file.into());
     desc
 }
