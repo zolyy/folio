@@ -12,6 +12,7 @@ pub mod crypt;
 pub mod document;
 pub mod error;
 pub mod filters;
+pub mod glyphs;
 pub mod lexer;
 pub mod object;
 pub mod parser;

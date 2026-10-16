@@ -96,10 +96,12 @@ fn page_rotation_and_resolution() {
 
 #[test]
 fn unsupported_content_is_reported_not_hidden() {
+    // Shadings arrive in stage 3d; until then they are counted, not dropped.
     let mut doc = Document::new();
-    doc.add_text_page("text arrives in stage 3c").unwrap();
+    doc.add_page([100.0, 100.0], b"/Sh0 sh", folio_core::Dict::new())
+        .unwrap();
     let r = render(&doc, 0, 36.0);
-    assert!(r.skipped.iter().any(|(k, n)| *k == "text" && *n >= 1));
+    assert!(r.skipped.iter().any(|(k, n)| *k == "shading" && *n >= 1));
 }
 
 #[test]

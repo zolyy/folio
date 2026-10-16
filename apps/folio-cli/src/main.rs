@@ -366,6 +366,12 @@ enum Cmd {
         /// Turn off "Smooth images".
         #[arg(long)]
         no_smooth_images: bool,
+        /// Turn off "Smooth text".
+        #[arg(long)]
+        no_smooth_text: bool,
+        /// Do not draw missing fonts with installed substitutes.
+        #[arg(long)]
+        no_system_fonts: bool,
         /// Transparent instead of white page background.
         #[arg(long)]
         transparent: bool,
@@ -1155,6 +1161,8 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             no_smooth_line_art,
             no_enhance_thin_lines,
             no_smooth_images,
+            no_smooth_text,
+            no_system_fonts,
             transparent,
             force,
         } => {
@@ -1173,6 +1181,8 @@ fn run(cli: &Cli) -> Res<ExitCode> {
                 smooth_line_art: !no_smooth_line_art,
                 enhance_thin_lines: !no_enhance_thin_lines,
                 smooth_images: !no_smooth_images,
+                smooth_text: !no_smooth_text,
+                system_fonts: !no_system_fonts,
                 white_background: !transparent,
             };
             let dir = dir_of(file, out_dir);
