@@ -14,7 +14,9 @@ Read `AGENTS.md` first; it wins over this file. The plan and stages are in `PLAN
 - `crates/folio-render` — `interp` (content streams, graphics state, painting, clipping,
   forms, text), `color`, `function` (types 0/2/3/4), `image` (codecs, masks), `font`
   (`mod` encodings and glyph lookup, `type1`, `cmap`, `system` installed-font substitutes),
-  `samples` (synthetic fonts and pages). Not-yet-drawn
+  `shading` (types 1-7, per-pixel and Gouraud), `samples` (synthetic fonts and pages).
+  Patterns, soft masks, groups and annotations live in `interp` (`paint_pattern`,
+  `soft_mask`, `run_form`, `annotations`). Not-yet-drawn
   content is counted in `Rendered::skipped`, never silently dropped.
 - `docs/acrobat/` — Acrobat Pro's options per feature and how Folio maps them. Read it
   before changing a feature; keep it current.

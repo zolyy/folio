@@ -9,12 +9,13 @@ use folio_core::lexer::Token;
 use folio_core::parser::Parser;
 use folio_core::{Dict, Document, Error, ObjRef, Object, Result};
 use tiny_skia::{
-    BlendMode, Color, FillRule, FilterQuality, LineCap, LineJoin, Mask, Paint, PathBuilder,
-    Pattern, Pixmap, SpreadMode, Stroke, StrokeDash, Transform,
+    BlendMode, Color, FillRule, FilterQuality, IntRect, LineCap, LineJoin, Mask, Paint,
+    PathBuilder, Pattern, Pixmap, PixmapPaint, SpreadMode, Stroke, StrokeDash, Transform,
 };
 
 use crate::color::ColorSpace;
 use crate::font::PdfFont;
+use crate::shading::Shading;
 use crate::{MAX_PIXELS, Options, Rendered};
 
 /// Operators per page before giving up (hostile content streams).
@@ -24,6 +25,8 @@ const MAX_STACK: usize = 256;
 const MAX_FORM_DEPTH: usize = 16;
 /// Decoded image pixels per page (repeated huge images are refused).
 const MAX_PAGE_IMAGE_PIXELS: u64 = 400_000_000;
+/// Transparency layers (groups, soft masks) only for pages up to this size.
+const MAX_LAYER_PIXELS: u64 = 40_000_000;
 /// Path segments per path.
 const MAX_SEGMENTS: usize = 1_000_000;
 
@@ -117,6 +120,12 @@ impl PageGeometry {
 struct GState {
     ctm: Transform,
     clip: Option<Rc<Mask>>,
+    /// Soft mask from the ExtGState (§11.6.5.2), in device space.
+    smask: Option<Rc<Mask>>,
+    /// clip × soft mask: what painting uses.
+    mask: Option<Rc<Mask>>,
+    fill_pattern: Option<Rc<Object>>,
+    stroke_pattern: Option<Rc<Object>>,
     fill_cs: Rc<ColorSpace>,
     fill: Vec<f64>,
     stroke_cs: Rc<ColorSpace>,
@@ -145,6 +154,10 @@ impl GState {
         GState {
             ctm,
             clip: None,
+            smask: None,
+            mask: None,
+            fill_pattern: None,
+            stroke_pattern: None,
             fill_cs: Rc::new(ColorSpace::Gray),
             fill: vec![0.0],
             stroke_cs: Rc::new(ColorSpace::Gray),
@@ -180,9 +193,14 @@ struct Ctx<'a> {
     images: HashMap<u32, Rc<Pixmap>>,
     image_pixels: u64,
     fonts: HashMap<u32, Rc<PdfFont>>,
+    /// Default user space → device (patterns are anchored to it).
+    base: Transform,
+    /// Uncoloured tiling patterns paint in this colour.
+    forced: Option<Color>,
+    pattern_depth: usize,
 }
 
-pub(crate) fn render(doc: &Document, page: ObjRef, opts: &Options) -> Result<Rendered> {
+pub fn render(doc: &Document, page: ObjRef, opts: &Options) -> Result<Rendered> {
     let geo = PageGeometry::new(doc, page, opts.dpi)?;
     let mut pixmap = Pixmap::new(geo.width, geo.height).ok_or_else(|| {
         Error::Limit(format!(
@@ -203,6 +221,9 @@ pub(crate) fn render(doc: &Document, page: ObjRef, opts: &Options) -> Result<Ren
         images: HashMap::new(),
         image_pixels: 0,
         fonts: HashMap::new(),
+        base: geo.base,
+        forced: None,
+        pattern_depth: 0,
     };
     let res = doc
         .page_attr(page, b"Resources")
@@ -210,6 +231,9 @@ pub(crate) fn render(doc: &Document, page: ObjRef, opts: &Options) -> Result<Ren
         .unwrap_or_default();
     let content = page_content(doc, page);
     ctx.run(&content, &res, GState::new(geo.base), 0);
+    if opts.annotations {
+        ctx.annotations(page);
+    }
     Ok(Rendered {
         pixmap: ctx.pixmap,
         skipped: ctx.skipped.into_iter().collect(),
@@ -434,8 +458,20 @@ impl Ctx<'_> {
                         gs.fill = init;
                     }
                 }
-                b"SC" | b"SCN" => gs.stroke = all,
-                b"sc" | b"scn" => gs.fill = all,
+                b"SC" | b"SCN" => {
+                    gs.stroke = all;
+                    gs.stroke_pattern = operands
+                        .last()
+                        .and_then(Object::as_name)
+                        .and_then(|n| self.pattern(res, n));
+                }
+                b"sc" | b"scn" => {
+                    gs.fill = all;
+                    gs.fill_pattern = operands
+                        .last()
+                        .and_then(Object::as_name)
+                        .and_then(|n| self.pattern(res, n));
+                }
                 b"G" | b"g" | b"RG" | b"rg" | b"K" | b"k" => {
                     let cs = match op.as_slice() {
                         b"G" | b"g" => ColorSpace::Gray,
@@ -494,7 +530,12 @@ impl Ctx<'_> {
                     p.lex.pos = end.1;
                     self.draw_image_dict(&d, &image, res, &gs, None);
                 }
-                b"sh" => self.skip("shading"),
+                b"sh" => {
+                    if let Some(name) = operands.first().and_then(Object::as_name) {
+                        let name = name.to_vec();
+                        self.sh(res, &name, &gs);
+                    }
+                }
                 b"BT" => {
                     tm = Transform::identity();
                     tlm = Transform::identity();
@@ -593,9 +634,11 @@ impl Ctx<'_> {
     }
 
     fn color(&mut self, cs: &ColorSpace, comps: &[f64], alpha: f32) -> Option<Color> {
-        if matches!(cs, ColorSpace::Pattern) {
-            self.skip("pattern");
+        if matches!(cs, ColorSpace::Pattern(_)) {
             return None;
+        }
+        if let Some(c) = self.forced {
+            return Some(c);
         }
         let [r, g, b] = cs.to_rgb(comps)?;
         Color::from_rgba(r, g, b, alpha.clamp(0.0, 1.0))
@@ -612,19 +655,33 @@ impl Ctx<'_> {
     }
 
     fn fill(&mut self, path: &tiny_skia::Path, rule: FillRule, gs: &GState) {
+        if matches!(*gs.fill_cs, ColorSpace::Pattern(_)) {
+            self.paint_pattern(path, rule, gs.ctm, gs, false);
+            return;
+        }
         let Some(c) = self.color(&gs.fill_cs.clone(), &gs.fill, gs.fill_alpha) else {
             return;
         };
         let paint = self.paint(c, gs.blend);
+        if !drawable(path, gs.ctm, 0.0) {
+            self.skip("geometry outside the safe range");
+            return;
+        }
         self.pixmap
-            .fill_path(path, &paint, rule, gs.ctm, gs.clip.as_deref());
+            .fill_path(path, &paint, rule, gs.ctm, gs.mask.as_deref());
     }
 
     fn stroke(&mut self, path: &tiny_skia::Path, gs: &GState) {
-        let Some(c) = self.color(&gs.stroke_cs.clone(), &gs.stroke, gs.stroke_alpha) else {
-            return;
+        let pattern = matches!(*gs.stroke_cs, ColorSpace::Pattern(_));
+        let color = if pattern {
+            Color::BLACK
+        } else {
+            match self.color(&gs.stroke_cs.clone(), &gs.stroke, gs.stroke_alpha) {
+                Some(c) => c,
+                None => return,
+            }
         };
-        let paint = self.paint(c, gs.blend);
+        let paint = self.paint(color, gs.blend);
         // Device scale of the current transform, to find sub-pixel strokes.
         let t = gs.ctm;
         let scale = ((t.sx * t.sy - t.kx * t.ky).abs()).sqrt();
@@ -648,13 +705,38 @@ impl Ctx<'_> {
             line_join: gs.join,
             dash,
         };
+        if pattern {
+            // Pattern strokes: fill the outline of the stroke with the pattern.
+            let res_scale = tiny_skia::PathStroker::compute_resolution_scale(&gs.ctm);
+            let outline = if stroke.width == 0.0 {
+                let thin = Stroke {
+                    width: 1.0 / scale.max(1e-6),
+                    ..stroke.clone()
+                };
+                path.stroke(&thin, res_scale)
+            } else {
+                path.stroke(&stroke, res_scale)
+            };
+            if let Some(o) = outline {
+                self.paint_pattern(&o, FillRule::Winding, gs.ctm, gs, true);
+            }
+            return;
+        }
+        if !drawable(path, gs.ctm, stroke.width * scale) {
+            self.skip("geometry outside the safe range");
+            return;
+        }
         self.pixmap
-            .stroke_path(path, &paint, &stroke, gs.ctm, gs.clip.as_deref());
+            .stroke_path(path, &paint, &stroke, gs.ctm, gs.mask.as_deref());
     }
 
     fn clip(&mut self, path: Option<&tiny_skia::Path>, rule: FillRule, gs: &mut GState) {
         let (w, h) = (self.pixmap.width(), self.pixmap.height());
         let aa = self.opts.smooth_line_art;
+        // Absurd clip geometry (outside the safe range) clips nothing.
+        if path.is_some_and(|p| !drawable(p, gs.ctm, 0.0)) {
+            return;
+        }
         let mask = match (path, &gs.clip) {
             // Clipping to an empty path hides everything after it.
             (None, _) => Mask::new(w, h),
@@ -670,6 +752,7 @@ impl Ctx<'_> {
         };
         if let Some(m) = mask {
             gs.clip = Some(Rc::new(m));
+            refresh_mask(gs);
         }
     }
 
@@ -734,10 +817,20 @@ impl Ctx<'_> {
             }
             _ => {}
         }
-        if let Some(sm) = doc.resolve_key(d, b"SMask")
-            && sm.as_name() != Some(b"None")
-        {
-            self.skip("soft mask");
+        match doc.resolve_key(d, b"SMask") {
+            Some(Object::Name(n)) if n == b"None" => {
+                gs.smask = None;
+                refresh_mask(gs);
+            }
+            Some(Object::Dict(sm)) => {
+                let sm = sm.clone();
+                match self.soft_mask(&sm, gs, res) {
+                    Some(m) => gs.smask = Some(Rc::new(m)),
+                    None => self.skip("soft mask"),
+                }
+                refresh_mask(gs);
+            }
+            _ => {}
         }
     }
 
@@ -786,7 +879,8 @@ impl Ctx<'_> {
         let fill = matches!(mode, 0 | 2 | 4 | 6);
         let stroke = matches!(mode, 1 | 2 | 5 | 6);
         let to_clip = mode >= 4;
-        let fill_paint = if fill && font.type3.is_none() {
+        let pattern_fill = fill && matches!(*gs.fill_cs, ColorSpace::Pattern(_));
+        let fill_paint = if fill && font.type3.is_none() && !pattern_fill {
             self.color(&gs.fill_cs.clone(), &gs.fill, gs.fill_alpha)
                 .map(|c| {
                     let mut p = Paint {
@@ -831,9 +925,14 @@ impl Ctx<'_> {
                 && let Some(path) = font.glyph(code, len)
             {
                 let trm = gs.ctm.pre_concat(text_to_user);
-                if let Some(p) = &fill_paint {
+                if pattern_fill {
+                    self.paint_pattern(&path, FillRule::Winding, trm, gs, false);
+                }
+                if !drawable(&path, trm, 0.0) {
+                    self.skip("geometry outside the safe range");
+                } else if let Some(p) = &fill_paint {
                     self.pixmap
-                        .fill_path(&path, p, FillRule::Winding, trm, gs.clip.as_deref());
+                        .fill_path(&path, p, FillRule::Winding, trm, gs.mask.as_deref());
                 }
                 if stroke && let Some(user) = (*path).clone().transform(text_to_user) {
                     self.stroke(&user, gs);
@@ -858,7 +957,10 @@ impl Ctx<'_> {
     fn clip_to_glyphs(&mut self, paths: &[tiny_skia::Path], gs: &mut GState) {
         let (w, h) = (self.pixmap.width(), self.pixmap.height());
         let Some(mut m) = Mask::new(w, h) else { return };
-        for p in paths {
+        for p in paths
+            .iter()
+            .filter(|p| drawable(p, Transform::identity(), 0.0))
+        {
             m.fill_path(
                 p,
                 FillRule::Winding,
@@ -872,6 +974,7 @@ impl Ctx<'_> {
             }
         }
         gs.clip = Some(Rc::new(m));
+        refresh_mask(gs);
     }
 
     /// Decode (or take from the cache) and draw an image in the unit square.
@@ -951,8 +1054,10 @@ impl Ctx<'_> {
             anti_alias: self.opts.smooth_images,
             ..Paint::default()
         };
-        if let Some(rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, w, h) {
-            self.pixmap.fill_rect(rect, &paint, t, gs.clip.as_deref());
+        if let Some(rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, w, h)
+            && drawable(&PathBuilder::from_rect(rect), t, 0.0)
+        {
+            self.pixmap.fill_rect(rect, &paint, t, gs.mask.as_deref());
         }
     }
 
@@ -978,12 +1083,36 @@ impl Ctx<'_> {
             Some(b"Form") => {}
             _ => return,
         }
-        if depth >= MAX_FORM_DEPTH || !self.forms_active.insert(r.num) {
+        if depth >= MAX_FORM_DEPTH {
             return;
         }
-        if let Ok(data) = decode_stream(s) {
+        let (dict, data) = (s.dict.clone(), s.data.clone());
+        self.run_form(r.num, &dict, &data, gs, res, depth);
+    }
+
+    /// Draw a Form XObject (§8.10): its Matrix, BBox clip and resources. A
+    /// transparency group is drawn into its own layer and composited with
+    /// the current alpha, blend mode and soft mask (§11.6.6).
+    fn run_form(
+        &mut self,
+        num: u32,
+        dict: &Dict,
+        raw: &[u8],
+        gs: &GState,
+        res: &Dict,
+        depth: usize,
+    ) {
+        let doc = self.doc;
+        if depth >= MAX_FORM_DEPTH || !self.forms_active.insert(num) {
+            return;
+        }
+        let stream = folio_core::Stream {
+            dict: dict.clone(),
+            data: raw.to_vec(),
+        };
+        if let Ok(data) = decode_stream(&stream) {
             let mut inner = gs.clone();
-            if let Some(Object::Array(m)) = doc.resolve_key(&s.dict, b"Matrix") {
+            if let Some(Object::Array(m)) = doc.resolve_key(dict, b"Matrix") {
                 let v: Vec<f32> = m
                     .iter()
                     .filter_map(|x| doc.resolve(x).as_f64())
@@ -995,10 +1124,7 @@ impl Ctx<'_> {
                         .pre_concat(Transform::from_row(*a, *b, *c, *d, *e, *f));
                 }
             }
-            if let Some(bb) = doc
-                .resolve_key(&s.dict, b"BBox")
-                .and_then(|o| rect_of(doc, o))
-            {
+            if let Some(bb) = doc.resolve_key(dict, b"BBox").and_then(|o| rect_of(doc, o)) {
                 let mut pb = PathBuilder::new();
                 if let Some(rect) = tiny_skia::Rect::from_ltrb(
                     finite(bb[0]),
@@ -1012,13 +1138,470 @@ impl Ctx<'_> {
                 self.clip(p.as_ref(), FillRule::Winding, &mut inner);
             }
             let form_res = doc
-                .resolve_key(&s.dict, b"Resources")
+                .resolve_key(dict, b"Resources")
                 .and_then(Object::as_dict)
                 .cloned()
                 .unwrap_or_else(|| res.clone());
-            self.run(&data, &form_res, inner, depth + 1);
+            let is_group = doc
+                .resolve_key(dict, b"Group")
+                .and_then(Object::as_dict)
+                .is_some_and(|g| g.get_name(b"S") == Some(b"Transparency"));
+            let (w, h) = (self.pixmap.width(), self.pixmap.height());
+            let small_enough = u64::from(w) * u64::from(h) <= MAX_LAYER_PIXELS;
+            let needs_layer =
+                gs.fill_alpha < 1.0 || gs.blend != BlendMode::SourceOver || gs.smask.is_some();
+            if is_group
+                && needs_layer
+                && small_enough
+                && let Some(layer) = Pixmap::new(w, h)
+            {
+                // Inside the group, alpha, blend mode and soft mask start fresh.
+                inner.fill_alpha = 1.0;
+                inner.stroke_alpha = 1.0;
+                inner.blend = BlendMode::SourceOver;
+                inner.smask = None;
+                refresh_mask(&mut inner);
+                let saved = std::mem::replace(&mut self.pixmap, layer);
+                self.run(&data, &form_res, inner, depth + 1);
+                let layer = std::mem::replace(&mut self.pixmap, saved);
+                let paint = PixmapPaint {
+                    opacity: gs.fill_alpha.clamp(0.0, 1.0),
+                    blend_mode: gs.blend,
+                    quality: FilterQuality::Nearest,
+                };
+                self.pixmap.draw_pixmap(
+                    0,
+                    0,
+                    layer.as_ref(),
+                    &paint,
+                    Transform::identity(),
+                    gs.mask.as_deref(),
+                );
+            } else {
+                self.run(&data, &form_res, inner, depth + 1);
+            }
         }
-        self.forms_active.remove(&r.num);
+        self.forms_active.remove(&num);
+    }
+
+    /// A pattern from the resources, kept with the graphics state.
+    fn pattern(&mut self, res: &Dict, name: &[u8]) -> Option<Rc<Object>> {
+        let doc = self.doc;
+        let o = doc
+            .resolve_key(res, b"Pattern")
+            .and_then(Object::as_dict)
+            .and_then(|p| p.get(name))?;
+        Some(Rc::new(doc.resolve(o).clone()))
+    }
+
+    fn page_rect(&self) -> Option<IntRect> {
+        IntRect::from_xywh(0, 0, self.pixmap.width(), self.pixmap.height())
+    }
+
+    /// Device-space bounds of a path, clipped to the page.
+    fn device_bounds(&self, path: &tiny_skia::Path, t: Transform) -> Option<IntRect> {
+        let b = path.clone().transform(t)?.bounds();
+        let page = self.page_rect()?;
+        let x0 = (b.left().floor() as i64).clamp(0, i64::from(page.width()));
+        let y0 = (b.top().floor() as i64).clamp(0, i64::from(page.height()));
+        let x1 = (b.right().ceil() as i64).clamp(0, i64::from(page.width()));
+        let y1 = (b.bottom().ceil() as i64).clamp(0, i64::from(page.height()));
+        IntRect::from_ltrb(x0 as i32, y0 as i32, x1 as i32, y1 as i32)
+    }
+
+    /// The `sh` operator: paint a shading over the current clip (§8.7.4.2).
+    fn sh(&mut self, res: &Dict, name: &[u8], gs: &GState) {
+        let doc = self.doc;
+        let Some(o) = doc
+            .resolve_key(res, b"Shading")
+            .and_then(Object::as_dict)
+            .and_then(|s| s.get(name))
+        else {
+            return;
+        };
+        let Some(sh) = Shading::parse(doc, o, Some(res)) else {
+            self.skip("undecodable shading");
+            return;
+        };
+        let area = match sh.bbox {
+            Some(b) => {
+                let mut pb = PathBuilder::new();
+                if let Some(r) = tiny_skia::Rect::from_ltrb(
+                    finite(b[0]),
+                    finite(b[1]),
+                    finite(b[2]),
+                    finite(b[3]),
+                ) {
+                    pb.push_rect(r);
+                }
+                pb.finish().and_then(|p| self.device_bounds(&p, gs.ctm))
+            }
+            None => self.page_rect(),
+        };
+        let Some(area) = area else { return };
+        let Some(layer) = sh.render(gs.ctm, area, false) else {
+            return;
+        };
+        let paint = PixmapPaint {
+            opacity: gs.fill_alpha.clamp(0.0, 1.0),
+            blend_mode: gs.blend,
+            quality: FilterQuality::Nearest,
+        };
+        self.pixmap.draw_pixmap(
+            area.x(),
+            area.y(),
+            layer.as_ref(),
+            &paint,
+            Transform::identity(),
+            gs.mask.as_deref(),
+        );
+    }
+
+    /// Fill `path` (with `transform` to device space) with the current
+    /// pattern: shading patterns (type 2) and tiling patterns (type 1),
+    /// coloured or uncoloured (§8.7.3).
+    fn paint_pattern(
+        &mut self,
+        path: &tiny_skia::Path,
+        rule: FillRule,
+        transform: Transform,
+        gs: &GState,
+        stroke_side: bool,
+    ) {
+        let doc = self.doc;
+        let pat = if stroke_side {
+            gs.stroke_pattern.clone()
+        } else {
+            gs.fill_pattern.clone()
+        };
+        let Some(pat) = pat else {
+            self.skip("pattern");
+            return;
+        };
+        if !drawable(path, transform, 0.0) {
+            self.skip("geometry outside the safe range");
+            return;
+        }
+        let Some(d) = pat.as_dict() else { return };
+        let m = match doc.resolve_key(d, b"Matrix") {
+            Some(Object::Array(a)) => {
+                let v: Vec<f32> = a
+                    .iter()
+                    .filter_map(|x| doc.resolve(x).as_f64())
+                    .map(finite)
+                    .collect();
+                match v.as_slice() {
+                    [a, b, c, e, f, g] => Transform::from_row(*a, *b, *c, *e, *f, *g),
+                    _ => Transform::identity(),
+                }
+            }
+            _ => Transform::identity(),
+        };
+        let to_dev = self.base.pre_concat(m);
+        let alpha = if stroke_side {
+            gs.stroke_alpha
+        } else {
+            gs.fill_alpha
+        }
+        .clamp(0.0, 1.0);
+        let (w, h) = (self.pixmap.width(), self.pixmap.height());
+        match d.get_int(b"PatternType") {
+            Some(2) => {
+                let Some(sh) = d.get(b"Shading").and_then(|o| Shading::parse(doc, o, None)) else {
+                    self.skip("undecodable shading");
+                    return;
+                };
+                let Some(area) = self.device_bounds(path, transform) else {
+                    return;
+                };
+                let Some(mut shape) = Mask::new(w, h) else {
+                    return;
+                };
+                shape.fill_path(path, rule, self.opts.smooth_line_art, transform);
+                if let Some(mm) = &gs.mask {
+                    for (a, b) in shape.data_mut().iter_mut().zip(mm.data()) {
+                        *a = ((u16::from(*a) * u16::from(*b) + 127) / 255) as u8;
+                    }
+                }
+                let Some(layer) = sh.render(to_dev, area, true) else {
+                    return;
+                };
+                let paint = PixmapPaint {
+                    opacity: alpha,
+                    blend_mode: gs.blend,
+                    quality: FilterQuality::Nearest,
+                };
+                self.pixmap.draw_pixmap(
+                    area.x(),
+                    area.y(),
+                    layer.as_ref(),
+                    &paint,
+                    Transform::identity(),
+                    Some(&shape),
+                );
+            }
+            Some(1) => {
+                if self.pattern_depth >= 3 {
+                    return;
+                }
+                let Some(st) = pat.as_stream() else { return };
+                let Some(bbox) = doc.resolve_key(d, b"BBox").and_then(|o| rect_of(doc, o)) else {
+                    return;
+                };
+                let num = |k: &[u8]| {
+                    doc.resolve_key(d, k)
+                        .and_then(Object::as_f64)
+                        .unwrap_or(0.0)
+                };
+                let (xs, ys) = (num(b"XStep").abs(), num(b"YStep").abs());
+                if !(xs > 0.0 && ys > 0.0) || !xs.is_finite() || !ys.is_finite() {
+                    return;
+                }
+                let det = f64::from((to_dev.sx * to_dev.sy - to_dev.kx * to_dev.ky).abs());
+                let mut s = det.sqrt();
+                if s.is_nan() || s <= 0.0 || !s.is_finite() {
+                    return;
+                }
+                // Keep one tile under 2048 × 2048 pixels.
+                let device_s = s;
+                s = s.min(2048.0 / xs).min(2048.0 / ys);
+                // At device resolution a tile maps pixel to pixel: sample it exactly.
+                let quality = if (s - device_s).abs() < 1e-9 {
+                    FilterQuality::Nearest
+                } else {
+                    FilterQuality::Bilinear
+                };
+                let tw = (xs * s).ceil().clamp(1.0, 2048.0) as u32;
+                let th = (ys * s).ceil().clamp(1.0, 2048.0) as u32;
+                let tile_ctm = Transform::from_row(
+                    s as f32,
+                    0.0,
+                    0.0,
+                    -(s as f32),
+                    (-bbox[0] * s) as f32,
+                    ((bbox[1] + ys) * s) as f32,
+                );
+                let Some(tile) = Pixmap::new(tw, th) else {
+                    return;
+                };
+                let Ok(data) = decode_stream(st) else { return };
+                let pres = doc
+                    .resolve_key(d, b"Resources")
+                    .and_then(Object::as_dict)
+                    .cloned()
+                    .unwrap_or_default();
+                let forced = if d.get_int(b"PaintType") == Some(2) {
+                    let (cs, comps) = if stroke_side {
+                        (gs.stroke_cs.clone(), &gs.stroke)
+                    } else {
+                        (gs.fill_cs.clone(), &gs.fill)
+                    };
+                    match &*cs {
+                        ColorSpace::Pattern(Some(base)) => base
+                            .to_rgb(comps)
+                            .and_then(|[r, g, b]| Color::from_rgba(r, g, b, 1.0)),
+                        _ => Some(Color::BLACK),
+                    }
+                } else {
+                    None
+                };
+                let saved = std::mem::replace(&mut self.pixmap, tile);
+                let saved_forced = std::mem::replace(&mut self.forced, forced);
+                self.pattern_depth += 1;
+                self.run(&data, &pres, GState::new(tile_ctm), 1);
+                self.pattern_depth -= 1;
+                self.forced = saved_forced;
+                let tile = std::mem::replace(&mut self.pixmap, saved);
+                let (Some(inv), Some(tile_inv)) = (transform.invert(), tile_ctm.invert()) else {
+                    return;
+                };
+                let shader_t = inv.pre_concat(to_dev).pre_concat(tile_inv);
+                let shader =
+                    Pattern::new(tile.as_ref(), SpreadMode::Repeat, quality, alpha, shader_t);
+                let paint = Paint {
+                    shader,
+                    blend_mode: gs.blend,
+                    anti_alias: self.opts.smooth_line_art,
+                    ..Paint::default()
+                };
+                self.pixmap
+                    .fill_path(path, &paint, rule, transform, gs.mask.as_deref());
+            }
+            _ => self.skip("pattern"),
+        }
+    }
+
+    /// A soft mask from an ExtGState SMask dictionary (§11.6.5.2): the
+    /// group's luminosity over its backdrop, or its alpha.
+    fn soft_mask(&mut self, sm: &Dict, gs: &GState, res: &Dict) -> Option<Mask> {
+        let doc = self.doc;
+        let g = sm.get(b"G")?.as_objref()?;
+        let Some(Object::Stream(st)) = doc.get(g) else {
+            return None;
+        };
+        let (dict, data) = (st.dict.clone(), st.data.clone());
+        let luminosity = sm.get_name(b"S") != Some(b"Alpha");
+        let (w, h) = (self.pixmap.width(), self.pixmap.height());
+        if u64::from(w) * u64::from(h) > MAX_LAYER_PIXELS {
+            return None;
+        }
+        let mut layer = Pixmap::new(w, h)?;
+        if luminosity {
+            let bc: Vec<f64> = doc
+                .resolve_key(sm, b"BC")
+                .and_then(Object::as_array)
+                .map(|a| a.iter().filter_map(|x| doc.resolve(x).as_f64()).collect())
+                .unwrap_or_default();
+            let cs = doc
+                .resolve_key(&dict, b"Group")
+                .and_then(Object::as_dict)
+                .and_then(|grp| grp.get(b"CS"))
+                .and_then(|c| ColorSpace::parse(doc, c, Some(res)))
+                .unwrap_or(ColorSpace::Gray);
+            let backdrop = if bc.is_empty() {
+                [0.0, 0.0, 0.0]
+            } else {
+                cs.to_rgb(&bc).unwrap_or([0.0, 0.0, 0.0])
+            };
+            if let Some(c) = Color::from_rgba(backdrop[0], backdrop[1], backdrop[2], 1.0) {
+                layer.fill(c);
+            }
+        }
+        let saved = std::mem::replace(&mut self.pixmap, layer);
+        let mut inner = GState::new(gs.ctm);
+        inner.fill_alpha = 1.0;
+        self.run_form(g.num, &dict, &data, &inner, res, 1);
+        let layer = std::mem::replace(&mut self.pixmap, saved);
+        let tr = doc
+            .resolve_key(sm, b"TR")
+            .filter(|o| o.as_name() != Some(b"Identity"))
+            .and_then(|f| crate::function::Function::parse(doc, f));
+        let mut lut = [0u8; 256];
+        for (i, slot) in lut.iter_mut().enumerate() {
+            let v = i as f64 / 255.0;
+            let v = tr
+                .as_ref()
+                .and_then(|f| f.eval(&[v]).first().copied())
+                .unwrap_or(v);
+            *slot = (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        }
+        let values: Vec<u8> = layer
+            .pixels()
+            .iter()
+            .map(|p| {
+                let raw = if luminosity {
+                    let c = p.demultiply();
+                    let l = 0.30 * f32::from(c.red())
+                        + 0.59 * f32::from(c.green())
+                        + 0.11 * f32::from(c.blue());
+                    l.round().clamp(0.0, 255.0) as u8
+                } else {
+                    p.alpha()
+                };
+                lut[usize::from(raw)]
+            })
+            .collect();
+        Mask::from_vec(values, tiny_skia::IntSize::from_wh(w, h)?)
+    }
+
+    /// Draw the normal appearance of every visible annotation (§12.5.5).
+    fn annotations(&mut self, page: ObjRef) {
+        let doc = self.doc;
+        let Some(pd) = doc.get(page).and_then(Object::as_dict) else {
+            return;
+        };
+        let Some(Object::Array(annots)) = doc.resolve_key(pd, b"Annots") else {
+            return;
+        };
+        let annots = annots.clone();
+        for a in annots.iter().take(10_000) {
+            let Some(ad) = doc.resolve(a).as_dict() else {
+                continue;
+            };
+            let flags = ad.get_int(b"F").unwrap_or(0);
+            // Hidden (bit 2) and NoView (bit 6).
+            if flags & (2 | 32) != 0 || ad.get_name(b"Subtype") == Some(b"Popup") {
+                continue;
+            }
+            let Some(ap) = doc.resolve_key(ad, b"AP").and_then(Object::as_dict) else {
+                continue;
+            };
+            let Some(n) = ap.get(b"N") else { continue };
+            let r = match doc.resolve(n) {
+                Object::Stream(_) => n.as_objref(),
+                Object::Dict(states) => ad
+                    .get_name(b"AS")
+                    .and_then(|s| states.get(s))
+                    .and_then(Object::as_objref),
+                _ => None,
+            };
+            let Some(r) = r else { continue };
+            let Some(Object::Stream(st)) = doc.get(r) else {
+                continue;
+            };
+            let Some(rect) = doc.resolve_key(ad, b"Rect").and_then(|o| rect_of(doc, o)) else {
+                continue;
+            };
+            let Some(bb) = doc
+                .resolve_key(&st.dict, b"BBox")
+                .and_then(|o| rect_of(doc, o))
+            else {
+                continue;
+            };
+            // Algorithm 8.1: map the transformed BBox onto Rect.
+            let m = match doc.resolve_key(&st.dict, b"Matrix") {
+                Some(Object::Array(a)) => {
+                    let v: Vec<f32> = a
+                        .iter()
+                        .filter_map(|x| doc.resolve(x).as_f64())
+                        .map(finite)
+                        .collect();
+                    match v.as_slice() {
+                        [a, b, c, e, f, g] => Transform::from_row(*a, *b, *c, *e, *f, *g),
+                        _ => Transform::identity(),
+                    }
+                }
+                _ => Transform::identity(),
+            };
+            let corners = [
+                (bb[0], bb[1]),
+                (bb[2], bb[1]),
+                (bb[0], bb[3]),
+                (bb[2], bb[3]),
+            ];
+            let pts: Vec<(f32, f32)> = corners
+                .iter()
+                .map(|&(x, y)| {
+                    let mut p = tiny_skia::Point::from_xy(finite(x), finite(y));
+                    m.map_point(&mut p);
+                    (p.x, p.y)
+                })
+                .collect();
+            let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+            for (x, y) in &pts {
+                x0 = x0.min(*x);
+                y0 = y0.min(*y);
+                x1 = x1.max(*x);
+                y1 = y1.max(*y);
+            }
+            if !(x1 > x0 && y1 > y0) {
+                continue;
+            }
+            let sx = (rect[2] - rect[0]) as f32 / (x1 - x0);
+            let sy = (rect[3] - rect[1]) as f32 / (y1 - y0);
+            let a_m = Transform::from_row(
+                sx,
+                0.0,
+                0.0,
+                sy,
+                rect[0] as f32 - x0 * sx,
+                rect[1] as f32 - y0 * sy,
+            );
+            let gs = GState::new(self.base.pre_concat(a_m));
+            let (dict, data) = (st.dict.clone(), st.data.clone());
+            let res = Dict::new();
+            self.run_form(r.num, &dict, &data, &gs, &res, 1);
+        }
     }
 }
 
@@ -1076,4 +1659,43 @@ fn inline_image_end(
         i += 1;
     }
     (data.len(), data.len())
+}
+
+/// Combine the clip and the soft mask into the mask painting uses.
+fn refresh_mask(gs: &mut GState) {
+    gs.mask = match (&gs.clip, &gs.smask) {
+        (None, None) => None,
+        (Some(c), None) => Some(c.clone()),
+        (None, Some(m)) => Some(m.clone()),
+        (Some(c), Some(m)) => {
+            let mut out = (**c).clone();
+            for (a, b) in out.data_mut().iter_mut().zip(m.data()) {
+                *a = ((u16::from(*a) * u16::from(*b) + 127) / 255) as u8;
+            }
+            Some(Rc::new(out))
+        }
+    };
+}
+
+/// Largest device coordinate handed to the rasteriser. tiny-skia works in
+/// fixed point inside; geometry far outside any page can upset it, and
+/// nothing that large is visible anyway.
+const MAX_DEVICE_COORD: f32 = 1.0e6;
+
+/// Whether `path` under `t` (plus a stroke margin) is safe to rasterise.
+fn drawable(path: &tiny_skia::Path, t: Transform, margin: f32) -> bool {
+    let finite = [t.sx, t.kx, t.ky, t.sy, t.tx, t.ty, margin]
+        .iter()
+        .all(|v| v.is_finite());
+    if !finite || margin.abs() > MAX_DEVICE_COORD {
+        return false;
+    }
+    let Some(p) = path.clone().transform(t) else {
+        return false;
+    };
+    let b = p.bounds();
+    let lim = MAX_DEVICE_COORD - margin.abs();
+    [b.left(), b.top(), b.right(), b.bottom()]
+        .iter()
+        .all(|v| v.is_finite() && v.abs() <= lim)
 }

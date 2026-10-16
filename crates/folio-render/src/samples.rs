@@ -371,7 +371,6 @@ fn type1_num(v: i32, out: &mut Vec<u8>) {
 
 /// A minimal Type 1 font program (PFA, eexec-encrypted) with glyph "A".
 pub fn tiny_type1() -> Vec<u8> {
-    use crate::font::type1::encrypt;
     let mut a = Vec::new();
     type1_num(0, &mut a);
     type1_num(700, &mut a);
@@ -386,13 +385,25 @@ pub fn tiny_type1() -> Vec<u8> {
     }
     a.push(9);
     a.push(14);
+    tiny_type1_with(&a)
+}
+
+/// Type 1 charstring bytes for numbers (exposed for regression tests).
+pub fn type1_charstring_num(v: i32, out: &mut Vec<u8>) {
+    type1_num(v, out);
+}
+
+/// A Type 1 font program whose glyph "A" runs the given (unencrypted)
+/// charstring.
+pub fn tiny_type1_with(a: &[u8]) -> Vec<u8> {
+    use crate::font::type1::encrypt;
     let notdef = vec![139u8, 139, 13, 14];
     let cs = |plain: &[u8]| {
         let mut p = vec![0u8; 4]; // lenIV 4
         p.extend_from_slice(plain);
         encrypt(&p, 4330)
     };
-    let (a, n) = (cs(&a), cs(&notdef));
+    let (a, n) = (cs(a), cs(&notdef));
     // Laid out as the Type 1 specification shows, so strict readers accept it.
     let mut private = b"\0\0\0\0dup /Private 12 dict dup begin\n/RD{string currentfile exch readstring pop}executeonly def\n/ND{noaccess def}executeonly def\n/NP{noaccess put}executeonly def\n/BlueValues [] def\n/MinFeature {16 16} def\n/password 5839 def\n/lenIV 4 def\n/Subrs 0 array\n/CharStrings 2 dict dup begin\n".to_vec();
     private.extend_from_slice(format!("/.notdef {} RD ", n.len()).as_bytes());
@@ -523,5 +534,272 @@ q BT /TT 100 Tf 7 Tr 300 500 Td (A) Tj ET 1 0 0 rg 0 0 612 792 re f Q
 BT /T0 100 Tf 0 Tr 300 350 Td <0001> Tj ET
 ";
     doc.add_page([612.0, 792.0], content, res)?;
+    Ok(doc)
+}
+
+// ---- Shading, pattern, transparency and annotation sample (stage 3d) ----
+
+fn type2(c0: &[f64], c1: &[f64]) -> Object {
+    let mut f = Dict::new();
+    f.set("FunctionType", Object::Int(2));
+    f.set("Domain", nums(&[0.0, 1.0]));
+    f.set("C0", nums(c0));
+    f.set("C1", nums(c1));
+    f.set("N", Object::Int(1));
+    f.into()
+}
+
+fn mesh_bytes(vertices: &[(Option<u8>, f64, f64, [u8; 3])]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (flag, x, y, c) in vertices {
+        if let Some(f) = flag {
+            out.push(*f);
+        }
+        let q = |v: f64, max: f64| ((v / max) * 65535.0).round() as u16;
+        out.extend_from_slice(&q(*x, 612.0).to_be_bytes());
+        out.extend_from_slice(&q(*y, 792.0).to_be_bytes());
+        out.extend_from_slice(c);
+    }
+    out
+}
+
+/// One page with every stage-3d feature at a known place (see tests/shading.rs).
+pub fn shading() -> Result<Document> {
+    let mut doc = Document::new();
+    let mut shadings = Dict::new();
+
+    let mut ax = Dict::new();
+    ax.set("ShadingType", Object::Int(2));
+    ax.set("ColorSpace", Object::name("DeviceRGB"));
+    ax.set("Coords", nums(&[50.0, 0.0, 250.0, 0.0]));
+    ax.set("Function", type2(&[1.0, 0.0, 0.0], &[0.0, 0.0, 1.0]));
+    ax.set(
+        "Extend",
+        Object::Array(vec![Object::Bool(true), Object::Bool(true)]),
+    );
+    shadings.set("ShA", ax.clone().into());
+
+    let mut rad = Dict::new();
+    rad.set("ShadingType", Object::Int(3));
+    rad.set("ColorSpace", Object::name("DeviceGray"));
+    rad.set("Coords", nums(&[350.0, 650.0, 0.0, 350.0, 650.0, 50.0]));
+    rad.set("Function", type2(&[1.0], &[0.0]));
+    rad.set(
+        "Extend",
+        Object::Array(vec![Object::Bool(true), Object::Bool(true)]),
+    );
+    shadings.set("ShR", rad.into());
+
+    let mut ps = Dict::new();
+    ps.set("FunctionType", Object::Int(4));
+    ps.set("Domain", nums(&[0.0, 1.0, 0.0, 1.0]));
+    ps.set("Range", nums(&[0.0, 1.0, 0.0, 1.0, 0.0, 1.0]));
+    let ps = doc.add(Object::Stream(Stream {
+        dict: ps,
+        data: b"{ 0 }".to_vec(),
+    }));
+    let mut fs = Dict::new();
+    fs.set("ShadingType", Object::Int(1));
+    fs.set("ColorSpace", Object::name("DeviceRGB"));
+    fs.set("Domain", nums(&[0.0, 1.0, 0.0, 1.0]));
+    fs.set("Matrix", nums(&[100.0, 0.0, 0.0, 100.0, 450.0, 600.0]));
+    fs.set("Function", ps.into());
+    shadings.set("ShF", fs.into());
+
+    let mut tri = Dict::new();
+    tri.set("ShadingType", Object::Int(4));
+    tri.set("ColorSpace", Object::name("DeviceRGB"));
+    tri.set("BitsPerCoordinate", Object::Int(16));
+    tri.set("BitsPerComponent", Object::Int(8));
+    tri.set("BitsPerFlag", Object::Int(8));
+    tri.set(
+        "Decode",
+        nums(&[0.0, 612.0, 0.0, 792.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]),
+    );
+    let tri = doc.add(Object::Stream(Stream {
+        dict: tri,
+        data: mesh_bytes(&[
+            (Some(0), 50.0, 400.0, [255, 0, 0]),
+            (Some(0), 150.0, 400.0, [0, 255, 0]),
+            (Some(0), 100.0, 500.0, [0, 0, 255]),
+        ]),
+    }));
+    shadings.set("ShT", tri.into());
+
+    let mut coons = Dict::new();
+    coons.set("ShadingType", Object::Int(6));
+    coons.set("ColorSpace", Object::name("DeviceRGB"));
+    coons.set("BitsPerCoordinate", Object::Int(16));
+    coons.set("BitsPerComponent", Object::Int(8));
+    coons.set("BitsPerFlag", Object::Int(8));
+    coons.set(
+        "Decode",
+        nums(&[0.0, 612.0, 0.0, 792.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]),
+    );
+    let pts = [
+        (200.0, 400.0),
+        (200.0, 433.0),
+        (200.0, 467.0),
+        (200.0, 500.0),
+        (233.0, 500.0),
+        (267.0, 500.0),
+        (300.0, 500.0),
+        (300.0, 467.0),
+        (300.0, 433.0),
+        (300.0, 400.0),
+        (267.0, 400.0),
+        (233.0, 400.0),
+    ];
+    let mut patch = vec![0u8];
+    let q = |v: f64, max: f64| ((v / max) * 65535.0).round() as u16;
+    for (x, y) in pts {
+        patch.extend_from_slice(&q(x, 612.0).to_be_bytes());
+        patch.extend_from_slice(&q(y, 792.0).to_be_bytes());
+    }
+    for c in [[255u8, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]] {
+        patch.extend_from_slice(&c);
+    }
+    let coons = doc.add(Object::Stream(Stream {
+        dict: coons,
+        data: patch,
+    }));
+    shadings.set("ShC", coons.into());
+
+    // Patterns: coloured tiling, uncoloured tiling, shading pattern.
+    let mut patterns = Dict::new();
+    let tiling = |paint_type: i64, content: &[u8]| {
+        let mut d = Dict::new();
+        d.set("Type", Object::name("Pattern"));
+        d.set("PatternType", Object::Int(1));
+        d.set("PaintType", Object::Int(paint_type));
+        d.set("TilingType", Object::Int(1));
+        d.set("BBox", rect([0.0, 0.0, 20.0, 20.0]));
+        d.set("XStep", Object::Int(20));
+        d.set("YStep", Object::Int(20));
+        d.set("Resources", Dict::new().into());
+        Object::Stream(Stream {
+            dict: d,
+            data: content.to_vec(),
+        })
+    };
+    let p1 = doc.add(tiling(1, b"1 0 0 rg 0 0 10 10 re f"));
+    let p2 = doc.add(tiling(2, b"0 0 10 10 re f"));
+    patterns.set("P1", p1.into());
+    patterns.set("P2", p2.into());
+    let mut sp = Dict::new();
+    sp.set("Type", Object::name("Pattern"));
+    sp.set("PatternType", Object::Int(2));
+    sp.set("Shading", ax.into());
+    patterns.set("P3", sp.into());
+
+    let mut cs = Dict::new();
+    cs.set(
+        "UP",
+        Object::Array(vec![Object::name("Pattern"), Object::name("DeviceRGB")]),
+    );
+
+    // Soft mask: white on the left half of the area, black backdrop elsewhere.
+    let mut grp = Dict::new();
+    grp.set("S", Object::name("Transparency"));
+    grp.set("CS", Object::name("DeviceGray"));
+    let mut md = Dict::new();
+    md.set("Type", Object::name("XObject"));
+    md.set("Subtype", Object::name("Form"));
+    md.set("BBox", rect([0.0, 0.0, 612.0, 792.0]));
+    md.set("Group", grp.clone().into());
+    let mask_form = doc.add(Object::Stream(Stream {
+        dict: md,
+        data: b"1 g 300 200 100 100 re f".to_vec(),
+    }));
+    let mut sm = Dict::new();
+    sm.set("S", Object::name("Luminosity"));
+    sm.set("G", mask_form.into());
+    let mut gsm = Dict::new();
+    gsm.set("SMask", sm.into());
+    let mut ga = Dict::new();
+    ga.set("ca", Object::Real(0.5));
+    let mut ext = Dict::new();
+    ext.set("SM", gsm.into());
+    ext.set("GA", ga.into());
+
+    // A transparency group: two overlapping red bars, drawn at 50% together.
+    let mut gd = Dict::new();
+    gd.set("Type", Object::name("XObject"));
+    gd.set("Subtype", Object::name("Form"));
+    gd.set("BBox", rect([0.0, 0.0, 612.0, 792.0]));
+    let mut g2 = Dict::new();
+    g2.set("S", Object::name("Transparency"));
+    gd.set("Group", g2.into());
+    let group = doc.add(Object::Stream(Stream {
+        dict: gd,
+        data: b"1 0 0 rg 520 200 40 100 re f 540 200 40 100 re f".to_vec(),
+    }));
+    let mut xo = Dict::new();
+    xo.set("Grp", group.into());
+
+    let mut res = Dict::new();
+    res.set("Shading", shadings.into());
+    res.set("Pattern", patterns.into());
+    res.set("ColorSpace", cs.into());
+    res.set("ExtGState", ext.into());
+    res.set("XObject", xo.into());
+
+    let content = b"\
+q 50 600 200 100 re W n /ShA sh Q
+q 300 600 100 100 re W n /ShR sh Q
+q 450 600 100 100 re W n /ShF sh Q
+/ShT sh
+/ShC sh
+q /Pattern cs /P1 scn 350 400 100 100 re f Q
+q /UP cs 0 0 1 /P2 scn 470 400 100 100 re f Q
+q /Pattern cs /P3 scn 50 200 200 100 re f Q
+q /SM gs 0 0 1 rg 300 200 200 100 re f Q
+q /GA gs /Grp Do Q
+";
+    let page = doc.add_page([612.0, 792.0], content, res)?;
+
+    // Annotations: one visible (green square scaled 2x into its Rect), one hidden.
+    let ap = |doc: &mut Document, content: &[u8]| {
+        let mut d = Dict::new();
+        d.set("Type", Object::name("XObject"));
+        d.set("Subtype", Object::name("Form"));
+        d.set("BBox", rect([0.0, 0.0, 50.0, 50.0]));
+        doc.add(Object::Stream(Stream {
+            dict: d,
+            data: content.to_vec(),
+        }))
+    };
+    let annot = |doc: &mut Document, r: [f64; 4], flags: i64, stream: folio_core::ObjRef| {
+        let mut n = Dict::new();
+        n.set("N", stream.into());
+        let mut a = Dict::new();
+        a.set("Type", Object::name("Annot"));
+        a.set("Subtype", Object::name("Square"));
+        a.set("Rect", rect(r));
+        a.set("F", Object::Int(flags));
+        a.set("AP", n.into());
+        doc.add(a.into())
+    };
+    let green = ap(&mut doc, b"0 1 0 rg 0 0 50 50 re f");
+    let red = ap(&mut doc, b"1 0 0 rg 0 0 50 50 re f");
+    let visible = annot(&mut doc, [100.0, 50.0, 200.0, 150.0], 4, green);
+    let hidden = annot(&mut doc, [300.0, 50.0, 400.0, 150.0], 2, red);
+    if let Some(d) = doc.get_mut(page).and_then(Object::as_dict_mut) {
+        d.set("Annots", Object::Array(vec![visible.into(), hidden.into()]));
+    }
+    Ok(doc)
+}
+
+/// A page showing "A" in the given Type 1 font program at `size` points.
+pub fn page_with_type1(program: Vec<u8>, size: f64) -> Result<Document> {
+    let mut doc = Document::new();
+    let d = font_file(&mut doc, "FontFile", program, None);
+    let f = simple_font(&mut doc, "Type1", d, &[700.0]);
+    let mut fonts = Dict::new();
+    fonts.set("F", f.into());
+    let mut res = Dict::new();
+    res.set("Font", fonts.into());
+    let content = format!("BT /F {size} Tf 10 10 Td (A) Tj ET");
+    doc.add_page([200.0, 200.0], content.as_bytes(), res)?;
     Ok(doc)
 }

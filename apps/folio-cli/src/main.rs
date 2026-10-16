@@ -372,6 +372,9 @@ enum Cmd {
         /// Do not draw missing fonts with installed substitutes.
         #[arg(long)]
         no_system_fonts: bool,
+        /// Do not draw comments, stamps and form fields.
+        #[arg(long)]
+        no_annotations: bool,
         /// Transparent instead of white page background.
         #[arg(long)]
         transparent: bool,
@@ -1163,6 +1166,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             no_smooth_images,
             no_smooth_text,
             no_system_fonts,
+            no_annotations,
             transparent,
             force,
         } => {
@@ -1183,6 +1187,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
                 smooth_images: !no_smooth_images,
                 smooth_text: !no_smooth_text,
                 system_fonts: !no_system_fonts,
+                annotations: !no_annotations,
                 white_background: !transparent,
             };
             let dir = dir_of(file, out_dir);

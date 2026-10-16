@@ -29,14 +29,15 @@ pub enum ColorSpace {
         /// `/None` separation: paints nothing.
         none: bool,
     },
-    /// Patterns are drawn in stage 3d; until then their area is left unpainted.
-    Pattern,
+    /// Pattern space, with the underlying space of uncoloured patterns.
+    Pattern(Option<Box<ColorSpace>>),
 }
 
 impl ColorSpace {
     pub fn components(&self) -> usize {
         match self {
-            ColorSpace::Gray | ColorSpace::Indexed { .. } | ColorSpace::Pattern => 1,
+            ColorSpace::Gray | ColorSpace::Indexed { .. } => 1,
+            ColorSpace::Pattern(base) => base.as_ref().map_or(1, |b| b.components()),
             ColorSpace::Rgb | ColorSpace::Lab { .. } => 3,
             ColorSpace::Cmyk => 4,
             ColorSpace::Tint { n, .. } => *n,
@@ -73,7 +74,7 @@ impl ColorSpace {
                 b"DeviceGray" | b"G" | b"CalGray" => Some(ColorSpace::Gray),
                 b"DeviceRGB" | b"RGB" | b"CalRGB" => Some(ColorSpace::Rgb),
                 b"DeviceCMYK" | b"CMYK" => Some(ColorSpace::Cmyk),
-                b"Pattern" => Some(ColorSpace::Pattern),
+                b"Pattern" => Some(ColorSpace::Pattern(None)),
                 other => {
                     let named = res
                         .and_then(|r| doc.resolve_key(r, b"ColorSpace"))
@@ -157,7 +158,11 @@ impl ColorSpace {
                             f: Function::parse(doc, arg(3)?),
                         })
                     }
-                    b"Pattern" => Some(ColorSpace::Pattern),
+                    b"Pattern" => Some(ColorSpace::Pattern(
+                        arg(1)
+                            .and_then(|b| Self::parse_depth(doc, b, res, depth + 1))
+                            .map(Box::new),
+                    )),
                     _ => None,
                 }
             }
@@ -218,7 +223,7 @@ impl ColorSpace {
                 };
                 return alt.to_rgb_depth(&out, depth + 1);
             }
-            ColorSpace::Pattern => return None,
+            ColorSpace::Pattern(_) => return None,
         })
     }
 }

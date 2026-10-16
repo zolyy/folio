@@ -171,3 +171,47 @@ fn text_matches_poppler() {
         report.join(", ")
     );
 }
+
+/// Regression (anti-crash gate, stage 3d run, mutant 5871): a damaged
+/// font produced a glyph 3·10¹² em tall. Handed to tiny-skia, it tripped an
+/// internal assertion (debug) or an out-of-range slice (release). Such
+/// geometry is now skipped and reported before rasterising.
+#[test]
+fn glyph_with_absurd_outline_is_skipped_not_fatal() {
+    let n = samples::type1_charstring_num;
+    let mut cs = Vec::new();
+    n(0, &mut cs);
+    n(700, &mut cs);
+    cs.push(13); // hsbw
+    n(100, &mut cs);
+    n(0, &mut cs);
+    cs.push(21); // rmoveto
+    for dy in [2_000_000_000, -2_000_000_000] {
+        for _ in 0..1500 {
+            n(0, &mut cs);
+            n(dy, &mut cs);
+            cs.push(5); // rlineto, up to 3·10¹² and back
+        }
+        if dy > 0 {
+            n(500, &mut cs);
+            n(0, &mut cs);
+            cs.push(5);
+        }
+    }
+    cs.push(9);
+    cs.push(14);
+    let doc = samples::page_with_type1(samples::tiny_type1_with(&cs), 100.0).unwrap();
+    let page = doc.pages().unwrap()[0];
+    let opts = Options {
+        dpi: 18.0,
+        system_fonts: false,
+        ..Options::default()
+    };
+    // Without the last-resort guard, so a panic would fail this test.
+    let r = folio_render::interp_for_tests::render(&doc, page, &opts).unwrap();
+    assert!(
+        r.skipped.iter().any(|(k, _)| k.contains("safe range")),
+        "{:?}",
+        r.skipped
+    );
+}
