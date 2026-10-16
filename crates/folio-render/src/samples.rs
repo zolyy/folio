@@ -491,6 +491,12 @@ pub fn text() -> Result<Document> {
     cid.set("BaseFont", Object::name("FolioTest"));
     cid.set("FontDescriptor", d.into());
     cid.set("CIDToGIDMap", Object::name("Identity"));
+    // Required by ISO 32000-2 Table 115; strict readers refuse the font without it.
+    let mut info = Dict::new();
+    info.set("Registry", Object::Str(b"Adobe".to_vec()));
+    info.set("Ordering", Object::Str(b"Identity".to_vec()));
+    info.set("Supplement", Object::Int(0));
+    cid.set("CIDSystemInfo", info.into());
     cid.set("DW", Object::Int(700));
     let cid = doc.add(cid.into());
     let mut t0 = Dict::new();
