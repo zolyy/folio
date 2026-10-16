@@ -26,7 +26,10 @@ brings it, **Folio choice** = not documented publicly.
 | Encodings: Standard, WinAnsi, MacRoman, Differences, TrueType cmap rules (3,1)/(3,0)/(1,0)/post | ✔ 3c |
 | Fonts not embedded (standard 14 and others): drawn with an installed metric-compatible font, stretched to the PDF widths | ✔ 3c (**Folio choice**; Acrobat uses its own bundled fonts) |
 | Predefined CJK CMaps (UniGB, UniJIS...) | later: needs CMap resources |
-| Shadings, patterns, transparency groups, soft masks | 3d |
+| Shadings 1–7: function-based, axial, radial (with Extend), Gouraud triangle meshes, lattices, Coons and tensor patches | ✔ 3d (tensor patches use their boundary curves) |
+| Patterns: tiling (coloured and uncoloured), shading patterns, for fills, strokes and text | ✔ 3d |
+| Soft masks (luminosity with backdrop, alpha, transfer function), transparency groups composited as a whole | ✔ 3d (knockout and non-isolated groups are drawn as isolated) |
+| Annotation appearances (normal appearance, appearance states, Hidden/NoView flags) | ✔ 3d; `--no-annotations` |
 | ICC colour management (CMYK through a press profile, as Acrobat does) | later (print.convert-colors); Folio converts DeviceCMYK with the simple formula until then, so CMYK colours look brighter than in Acrobat |
 | Overprint preview | later (print.output-preview) |
 

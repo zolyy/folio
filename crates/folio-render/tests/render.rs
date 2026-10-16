@@ -96,12 +96,24 @@ fn page_rotation_and_resolution() {
 
 #[test]
 fn unsupported_content_is_reported_not_hidden() {
-    // Shadings arrive in stage 3d; until then they are counted, not dropped.
+    // Content Folio cannot draw is counted, never silently dropped.
+    let mut bad = folio_core::Dict::new();
+    bad.set("ShadingType", folio_core::Object::Int(99));
+    bad.set("ColorSpace", folio_core::Object::name("DeviceRGB"));
+    let mut sh = folio_core::Dict::new();
+    sh.set("Sh0", bad.into());
+    let mut res = folio_core::Dict::new();
+    res.set("Shading", sh.into());
     let mut doc = Document::new();
-    doc.add_page([100.0, 100.0], b"/Sh0 sh", folio_core::Dict::new())
-        .unwrap();
+    doc.add_page([100.0, 100.0], b"/Sh0 sh", res).unwrap();
     let r = render(&doc, 0, 36.0);
-    assert!(r.skipped.iter().any(|(k, n)| *k == "shading" && *n >= 1));
+    assert!(
+        r.skipped
+            .iter()
+            .any(|(k, n)| *k == "undecodable shading" && *n >= 1),
+        "{:?}",
+        r.skipped
+    );
 }
 
 #[test]

@@ -14,6 +14,7 @@ pub mod function;
 pub mod image;
 mod interp;
 pub mod samples;
+pub mod shading;
 
 use folio_core::{Document, Error, ObjRef, Result};
 pub use tiny_skia::Pixmap;
@@ -37,6 +38,8 @@ pub struct Options {
     /// Draw fonts the PDF does not embed with a metric-compatible font
     /// installed on this computer (never copied or shipped).
     pub system_fonts: bool,
+    /// Draw annotation appearances (comments, stamps, form fields).
+    pub annotations: bool,
     /// Paint the page white first (off = transparent background).
     pub white_background: bool,
 }
@@ -50,6 +53,7 @@ impl Default for Options {
             smooth_images: true,
             smooth_text: true,
             system_fonts: true,
+            annotations: true,
             white_background: true,
         }
     }
@@ -78,6 +82,12 @@ impl Rendered {
     }
 }
 
+/// The renderer without the last-resort guard, so tests see real panics.
+#[doc(hidden)]
+pub mod interp_for_tests {
+    pub use crate::interp::render;
+}
+
 /// The pixel size a page renders to at `dpi`, rotation applied.
 pub fn page_pixel_size(doc: &Document, page: ObjRef, dpi: f64) -> Result<(u32, u32)> {
     let geo = interp::PageGeometry::new(doc, page, dpi)?;
@@ -85,6 +95,17 @@ pub fn page_pixel_size(doc: &Document, page: ObjRef, dpi: f64) -> Result<(u32, u
 }
 
 /// Render one page.
+///
+/// A last-resort guard (AGENTS.md §3) turns a panic escaping the renderer
+/// or its rasteriser into an error for this page; the inputs that caused
+/// such panics are rejected earlier and kept as regression tests.
 pub fn render_page(doc: &Document, page: ObjRef, opts: &Options) -> Result<Rendered> {
-    interp::render(doc, page, opts)
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        interp::render(doc, page, opts)
+    }))
+    .unwrap_or_else(|_| {
+        Err(Error::Invalid(
+            "this page could not be drawn (the renderer hit an internal error)".into(),
+        ))
+    })
 }

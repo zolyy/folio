@@ -27,7 +27,7 @@ list of Acrobat Pro features and the order they arrive in, and
 | 0 | Foundation: PDF engine (lenient parser, repair, filters, writer), verification agent | ✅ |
 | 1 | Organize pages + command line, faithful to Acrobat's options (combine, split, extract, insert, replace, rotate, crop, page labels, properties, reduce size, text) | ✅ |
 | 2 | Security, faithful to Acrobat: open protected files (RC4 40/128, AES-128/256), Encrypt with Password with every option, Restrictions Summary, permissions enforced | ✅ |
-| 3 | Rendering engine — 3a vector graphics ✅ (paths, clipping, colour spaces, functions, transparency, forms); 3b images ✅ (JPEG, JPEG 2000, JBIG2, fax, masks); 3c text ✅ (TrueType, OpenType, CFF, Type 1, Type 3, CID fonts); all match Poppler; 3d shadings, 3e image export | in progress |
+| 3 | Rendering engine — 3a vector graphics ✅ (paths, clipping, colour spaces, functions, transparency, forms); 3b images ✅ (JPEG, JPEG 2000, JBIG2, fax, masks); 3c text ✅ (TrueType, OpenType, CFF, Type 1, Type 3, CID fonts); 3d ✅ shadings, patterns, soft masks, transparency groups, annotations; all match Poppler; 3e image export | in progress |
 | 4 | Desktop app | planned |
 | 5–16 | Comments, forms, editing, convert, signatures, redaction, OCR, optimize, PDF/A, tools, print, installers | planned |
 

@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use folio_core::crashgen::{Rng, core_samples, mutate, nasty_inputs};
 use folio_core::{Dict, Document};
-use folio_render::{Options, render_page, samples};
+use folio_render::{Options, samples};
 
 /// Debug builds and slow CI runners get more time; release gates stay strict.
 const SLOW: Duration = if cfg!(debug_assertions) {
@@ -38,7 +38,7 @@ fn exercise_render(bytes: &[u8]) {
                 smooth_line_art: dpi > 10.0,
                 ..Options::default()
             };
-            if let Ok(r) = render_page(&doc, p, &opts) {
+            if let Ok(r) = folio_render::interp_for_tests::render(&doc, p, &opts) {
                 let _ = r.rgba(0, 0);
             }
         }
@@ -397,4 +397,183 @@ fn stage3c_hostile_fonts_do_not_crash() {
         );
     }
     eprintln!("stage 3c anti-crash: {n} hostile font programs");
+}
+
+/// Stage 3d: shadings, patterns, soft masks, groups and annotations, damaged
+/// on purpose, plus mutations of the stage-3d sample.
+#[test]
+fn stage3d_hostile_shading_and_transparency_do_not_crash() {
+    use folio_core::{Object, Stream};
+    let num = |v: f64| Object::Real(v);
+    let arr = |v: &[f64]| Object::Array(v.iter().map(|&x| Object::Real(x)).collect());
+    let mut doc = Document::new();
+
+    // A tiling pattern whose cell paints with itself, and a soft mask whose
+    // group sets the same soft mask again.
+    let pat = doc.add(Object::Null);
+    let mut pres = Dict::new();
+    let mut pdict = Dict::new();
+    pdict.set("P", pat.into());
+    pres.set("Pattern", pdict.clone().into());
+    let mut pd = Dict::new();
+    pd.set("PatternType", Object::Int(1));
+    pd.set("PaintType", Object::Int(1));
+    pd.set("BBox", arr(&[0.0, 0.0, 0.001, 1e9]));
+    pd.set("XStep", num(0.0001));
+    pd.set("YStep", num(1e12));
+    pd.set("Resources", pres.into());
+    doc.objects.insert(
+        pat.num,
+        Object::Stream(Stream {
+            dict: pd,
+            data: b"/Pattern cs /P scn 0 0 1 1 re f".to_vec(),
+        }),
+    );
+    let grp = doc.add(Object::Null);
+    let mut sm = Dict::new();
+    sm.set("S", Object::name("Luminosity"));
+    sm.set("G", grp.into());
+    sm.set("BC", arr(&[f64::NAN]));
+    sm.set("TR", Object::Int(7));
+    let mut gsd = Dict::new();
+    gsd.set("SMask", sm.into());
+    let mut ext = Dict::new();
+    ext.set("S", gsd.into());
+    let mut gres = Dict::new();
+    gres.set("ExtGState", ext.clone().into());
+    let mut gd = Dict::new();
+    gd.set("Subtype", Object::name("Form"));
+    gd.set("BBox", arr(&[0.0, 0.0, 100.0, 100.0]));
+    gd.set("Resources", gres.into());
+    let mut g = Dict::new();
+    g.set("S", Object::name("Transparency"));
+    gd.set("Group", g.into());
+    doc.objects.insert(
+        grp.num,
+        Object::Stream(Stream {
+            dict: gd,
+            data: b"/S gs 1 g 0 0 50 50 re f /G Do".to_vec(),
+        }),
+    );
+
+    let mut shadings = Dict::new();
+    let mut bad_radial = Dict::new();
+    bad_radial.set("ShadingType", Object::Int(3));
+    bad_radial.set("ColorSpace", Object::name("DeviceRGB"));
+    bad_radial.set("Coords", arr(&[0.0, 0.0, -5.0, f64::NAN, 1e300, -1e300]));
+    let mut f = Dict::new();
+    f.set("FunctionType", Object::Int(2));
+    f.set("C0", arr(&[0.0]));
+    f.set("C1", arr(&[1.0, 1.0, 1.0, 1.0]));
+    f.set("N", num(-3.5));
+    bad_radial.set("Function", f.into());
+    shadings.set("R", bad_radial.into());
+    // A mesh claiming 32-bit fields over random data.
+    let mut rng = Rng::new(0x5EED_F011_0000_003D);
+    for (name, ty) in [("M4", 4), ("M5", 5), ("M6", 6), ("M7", 7)] {
+        let mut d = Dict::new();
+        d.set("ShadingType", Object::Int(ty));
+        d.set("ColorSpace", Object::name("DeviceCMYK"));
+        d.set("BitsPerCoordinate", Object::Int(32));
+        d.set("BitsPerComponent", Object::Int(16));
+        d.set("BitsPerFlag", Object::Int(8));
+        d.set("VerticesPerRow", Object::Int(2));
+        d.set(
+            "Decode",
+            arr(&[-1e9, 1e9, -1e9, 1e9, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]),
+        );
+        let data: Vec<u8> = (0..200_000).map(|_| rng.next_u64() as u8).collect();
+        let r = doc.add(Object::Stream(Stream { dict: d, data }));
+        shadings.set(name, r.into());
+    }
+
+    let mut xo = Dict::new();
+    xo.set("G", grp.into());
+    let mut res = Dict::new();
+    res.set("Pattern", pdict.into());
+    res.set("Shading", shadings.into());
+    res.set("ExtGState", ext.into());
+    res.set("XObject", xo.into());
+    let page = doc
+        .add_page(
+            [300.0, 300.0],
+            b"/R sh /M4 sh /M5 sh /M6 sh /M7 sh /Pattern cs /P scn 0 0 300 300 re f /S gs /G Do 0 0 100 100 re f",
+            res,
+        )
+        .unwrap();
+    // Annotations with absurd rectangles and appearance cycles.
+    let ap = doc.add(Object::Null);
+    let mut apd = Dict::new();
+    apd.set("Subtype", Object::name("Form"));
+    apd.set("BBox", arr(&[0.0, 0.0, 0.0, 0.0]));
+    apd.set("Matrix", arr(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+    doc.objects.insert(
+        ap.num,
+        Object::Stream(Stream {
+            dict: apd,
+            data: b"0 0 10 10 re f".to_vec(),
+        }),
+    );
+    let mut annots = Vec::new();
+    for r in [
+        [0.0, 0.0, 1e30, 1e30],
+        [f64::NAN, 0.0, 1.0, 1.0],
+        [5.0, 5.0, 5.0, 5.0],
+    ] {
+        let mut n = Dict::new();
+        n.set("N", ap.into());
+        let mut a = Dict::new();
+        a.set("Subtype", Object::name("Stamp"));
+        a.set("Rect", arr(&r));
+        a.set("AP", n.into());
+        annots.push(doc.add(a.into()).into());
+    }
+    if let Some(d) = doc.get_mut(page).and_then(Object::as_dict_mut) {
+        d.set("Annots", Object::Array(annots));
+    }
+    let bytes = doc.to_bytes().unwrap();
+    let t = Instant::now();
+    let outcome = std::panic::catch_unwind(|| exercise_render(&bytes));
+    assert!(outcome.is_ok(), "hostile stage-3d page panicked");
+    assert!(
+        t.elapsed() < SLOW,
+        "hostile stage-3d page took {:?}",
+        t.elapsed()
+    );
+
+    // Mutations of the stage-3d sample.
+    let base = samples::shading().unwrap().to_bytes().unwrap();
+    let mut plain = samples::shading().unwrap();
+    for o in plain.objects.values_mut() {
+        if let Object::Stream(st) = o
+            && let Ok(d) = folio_core::filters::decode_stream(st)
+        {
+            st.data = d;
+            st.dict.remove(b"Filter");
+        }
+    }
+    let plain = plain.to_bytes().unwrap();
+    let n = (iterations() / 4).max(50);
+    let mut worst = Duration::ZERO;
+    for i in 0..n {
+        let input = mutate(if i % 2 == 0 { &base } else { &plain }, &mut rng);
+        let t = Instant::now();
+        let outcome = std::panic::catch_unwind(|| exercise_render(&input));
+        let took = t.elapsed();
+        worst = worst.max(took);
+        if outcome.is_err() || took > SLOW {
+            let path = std::env::temp_dir().join(format!("folio-crash-3d-{i}.pdf"));
+            let _ = std::fs::write(&path, &input);
+            panic!(
+                "stage-3d mutant {i} {} (saved to {})",
+                if outcome.is_err() {
+                    "panicked"
+                } else {
+                    "was too slow"
+                },
+                path.display()
+            );
+        }
+    }
+    eprintln!("stage 3d anti-crash: hostile page + {n} mutants, slowest {worst:?}");
 }
