@@ -14,6 +14,7 @@ use tiny_skia::{
 };
 
 use crate::color::ColorSpace;
+use crate::font::PdfFont;
 use crate::{MAX_PIXELS, Options, Rendered};
 
 /// Operators per page before giving up (hostile content streams).
@@ -129,6 +130,14 @@ struct GState {
     fill_alpha: f32,
     stroke_alpha: f32,
     blend: BlendMode,
+    font: Option<Rc<PdfFont>>,
+    font_size: f32,
+    char_space: f32,
+    word_space: f32,
+    hscale: f32,
+    leading: f32,
+    rise: f32,
+    render_mode: u8,
 }
 
 impl GState {
@@ -149,6 +158,14 @@ impl GState {
             fill_alpha: 1.0,
             stroke_alpha: 1.0,
             blend: BlendMode::SourceOver,
+            font: None,
+            font_size: 12.0,
+            char_space: 0.0,
+            word_space: 0.0,
+            hscale: 1.0,
+            leading: 0.0,
+            rise: 0.0,
+            render_mode: 0,
         }
     }
 }
@@ -162,6 +179,7 @@ struct Ctx<'a> {
     forms_active: HashSet<u32>,
     images: HashMap<u32, Rc<Pixmap>>,
     image_pixels: u64,
+    fonts: HashMap<u32, Rc<PdfFont>>,
 }
 
 pub(crate) fn render(doc: &Document, page: ObjRef, opts: &Options) -> Result<Rendered> {
@@ -184,6 +202,7 @@ pub(crate) fn render(doc: &Document, page: ObjRef, opts: &Options) -> Result<Ren
         forms_active: HashSet::new(),
         images: HashMap::new(),
         image_pixels: 0,
+        fonts: HashMap::new(),
     };
     let res = doc
         .page_attr(page, b"Resources")
@@ -260,6 +279,9 @@ impl Ctx<'_> {
         let mut cur = (0.0f32, 0.0f32);
         let mut pending_clip: Option<FillRule> = None;
         let mut operands: Vec<Object> = Vec::new();
+        let mut tm = Transform::identity();
+        let mut tlm = Transform::identity();
+        let mut text_clip: Vec<tiny_skia::Path> = Vec::new();
         let mut p = Parser::content(content);
         loop {
             let at = p.lex.pos;
@@ -473,7 +495,79 @@ impl Ctx<'_> {
                     self.draw_image_dict(&d, &image, res, &gs, None);
                 }
                 b"sh" => self.skip("shading"),
-                b"Tj" | b"TJ" | b"'" | b"\"" => self.skip("text"),
+                b"BT" => {
+                    tm = Transform::identity();
+                    tlm = Transform::identity();
+                    text_clip.clear();
+                }
+                b"ET" => {
+                    if !text_clip.is_empty() {
+                        let paths = std::mem::take(&mut text_clip);
+                        self.clip_to_glyphs(&paths, &mut gs);
+                    }
+                }
+                b"Tf" => {
+                    gs.font_size = n(1);
+                    gs.font = operands
+                        .first()
+                        .and_then(Object::as_name)
+                        .map(<[u8]>::to_vec)
+                        .and_then(|name| self.font(res, &name));
+                }
+                b"Tc" => gs.char_space = n(0),
+                b"Tw" => gs.word_space = n(0),
+                b"Tz" => gs.hscale = n(0) / 100.0,
+                b"TL" => gs.leading = n(0),
+                b"Ts" => gs.rise = n(0),
+                b"Tr" => gs.render_mode = (n(0) as i32).clamp(0, 7) as u8,
+                b"Td" => {
+                    tlm = tlm.pre_concat(Transform::from_translate(n(0), n(1)));
+                    tm = tlm;
+                }
+                b"TD" => {
+                    gs.leading = -n(1);
+                    tlm = tlm.pre_concat(Transform::from_translate(n(0), n(1)));
+                    tm = tlm;
+                }
+                b"Tm" => {
+                    tlm = Transform::from_row(n(0), n(1), n(2), n(3), n(4), n(5));
+                    tm = tlm;
+                }
+                b"T*" => {
+                    tlm = tlm.pre_concat(Transform::from_translate(0.0, -gs.leading));
+                    tm = tlm;
+                }
+                b"Tj" | b"'" | b"\"" => {
+                    if op.as_slice() == b"\"" {
+                        gs.word_space = n(0);
+                        gs.char_space = n(1);
+                    }
+                    if op.as_slice() != b"Tj" {
+                        tlm = tlm.pre_concat(Transform::from_translate(0.0, -gs.leading));
+                        tm = tlm;
+                    }
+                    if let Some(s) = operands.last().and_then(Object::as_str) {
+                        let s = s.to_vec();
+                        self.show(&s, &mut tm, &gs, res, &mut text_clip, depth);
+                    }
+                }
+                b"TJ" => {
+                    if let Some(Object::Array(items)) = operands.first() {
+                        let items = items.clone();
+                        for it in &items {
+                            match it {
+                                Object::Str(s) => {
+                                    self.show(s, &mut tm, &gs, res, &mut text_clip, depth)
+                                }
+                                o => {
+                                    let adj = finite(o.as_f64().unwrap_or(0.0));
+                                    let tx = -adj / 1000.0 * gs.font_size * gs.hscale;
+                                    tm = tm.pre_concat(Transform::from_translate(tx, 0.0));
+                                }
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
             if let Some((fill, stroke, rule, close)) = paint {
@@ -645,6 +739,139 @@ impl Ctx<'_> {
         {
             self.skip("soft mask");
         }
+    }
+
+    /// The font named `name` in the resources, loaded once per page.
+    fn font(&mut self, res: &Dict, name: &[u8]) -> Option<Rc<PdfFont>> {
+        let doc = self.doc;
+        let entry = doc
+            .resolve_key(res, b"Font")
+            .and_then(Object::as_dict)
+            .and_then(|f| f.get(name))?;
+        let num = entry.as_objref().map(|r| r.num);
+        if let Some(n) = num
+            && let Some(f) = self.fonts.get(&n)
+        {
+            return Some(f.clone());
+        }
+        let fd = doc.resolve(entry).as_dict()?;
+        let f = Rc::new(PdfFont::load(doc, fd, self.opts.system_fonts));
+        if let Some(n) = num
+            && self.fonts.len() < 4096
+        {
+            self.fonts.insert(n, f.clone());
+        }
+        Some(f)
+    }
+
+    /// Show a string: draw each glyph by the text rendering mode and advance
+    /// the text matrix (§9.4.4).
+    fn show(
+        &mut self,
+        bytes: &[u8],
+        tm: &mut Transform,
+        gs: &GState,
+        res: &Dict,
+        clip: &mut Vec<tiny_skia::Path>,
+        depth: usize,
+    ) {
+        let Some(font) = gs.font.clone() else {
+            self.skip("text without a font");
+            return;
+        };
+        if font.unavailable {
+            self.skip("text (font not embedded and no substitute installed)");
+        }
+        let mode = gs.render_mode;
+        let fill = matches!(mode, 0 | 2 | 4 | 6);
+        let stroke = matches!(mode, 1 | 2 | 5 | 6);
+        let to_clip = mode >= 4;
+        let fill_paint = if fill && font.type3.is_none() {
+            self.color(&gs.fill_cs.clone(), &gs.fill, gs.fill_alpha)
+                .map(|c| {
+                    let mut p = Paint {
+                        anti_alias: self.opts.smooth_text,
+                        blend_mode: gs.blend,
+                        ..Paint::default()
+                    };
+                    p.set_color(c);
+                    p
+                })
+        } else {
+            None
+        };
+        let (size, hs) = (gs.font_size, gs.hscale);
+        for (code, len) in font.codes(bytes) {
+            let text_to_user =
+                tm.pre_concat(Transform::from_row(size * hs, 0.0, 0.0, size, 0.0, gs.rise));
+            if let Some(t3) = &font.type3 {
+                if let Some(proc_data) = font.type3_proc(code)
+                    && depth < 4
+                    && mode != 3
+                {
+                    let m = t3.matrix;
+                    let mut inner = gs.clone();
+                    inner.ctm = gs
+                        .ctm
+                        .pre_concat(text_to_user)
+                        .pre_concat(Transform::from_row(
+                            m[0] as f32,
+                            m[1] as f32,
+                            m[2] as f32,
+                            m[3] as f32,
+                            m[4] as f32,
+                            m[5] as f32,
+                        ));
+                    inner.font = None;
+                    let r3 = t3.resources.clone().unwrap_or_else(|| res.clone());
+                    let data = proc_data.to_vec();
+                    self.run(&data, &r3, inner, depth + 1);
+                }
+            } else if !font.unavailable
+                && let Some(path) = font.glyph(code, len)
+            {
+                let trm = gs.ctm.pre_concat(text_to_user);
+                if let Some(p) = &fill_paint {
+                    self.pixmap
+                        .fill_path(&path, p, FillRule::Winding, trm, gs.clip.as_deref());
+                }
+                if stroke && let Some(user) = (*path).clone().transform(text_to_user) {
+                    self.stroke(&user, gs);
+                }
+                if to_clip
+                    && clip.len() < 100_000
+                    && let Some(dev) = (*path).clone().transform(trm)
+                {
+                    clip.push(dev);
+                }
+            }
+            let w = font.width(code, len) as f32;
+            let mut tx = w * size + gs.char_space;
+            if len == 1 && code == 32 {
+                tx += gs.word_space;
+            }
+            *tm = tm.pre_concat(Transform::from_translate(finite(f64::from(tx * hs)), 0.0));
+        }
+    }
+
+    /// Text rendering modes 4–7: intersect the clip with the glyphs shown.
+    fn clip_to_glyphs(&mut self, paths: &[tiny_skia::Path], gs: &mut GState) {
+        let (w, h) = (self.pixmap.width(), self.pixmap.height());
+        let Some(mut m) = Mask::new(w, h) else { return };
+        for p in paths {
+            m.fill_path(
+                p,
+                FillRule::Winding,
+                self.opts.smooth_text,
+                Transform::identity(),
+            );
+        }
+        if let Some(old) = &gs.clip {
+            for (a, b) in m.data_mut().iter_mut().zip(old.data()) {
+                *a = ((u16::from(*a) * u16::from(*b) + 127) / 255) as u8;
+            }
+        }
+        gs.clip = Some(Rc::new(m));
     }
 
     /// Decode (or take from the cache) and draw an image in the unit square.

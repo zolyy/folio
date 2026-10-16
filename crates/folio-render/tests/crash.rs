@@ -120,6 +120,17 @@ fn stage3a_mutated_documents_do_not_crash() {
     bases.push(samples::vector().unwrap().to_bytes().unwrap());
     bases.push(samples::vector_uncompressed().unwrap().to_bytes().unwrap());
     bases.push(common::image_sample().to_bytes().unwrap());
+    bases.push(samples::text().unwrap().to_bytes().unwrap());
+    let mut plain = samples::text().unwrap();
+    for o in plain.objects.values_mut() {
+        if let folio_core::Object::Stream(st) = o
+            && let Ok(d) = folio_core::filters::decode_stream(st)
+        {
+            st.data = d;
+            st.dict.remove(b"Filter");
+        }
+    }
+    bases.push(plain.to_bytes().unwrap());
     let n = iterations();
     let mut rng = Rng::new(0x5EED_F011_0000_003A);
     let mut worst = Duration::ZERO;
@@ -270,4 +281,120 @@ fn stage3b_hostile_images_do_not_crash() {
             t.elapsed()
         );
     }
+}
+
+/// Stage 3c: font programs, CMaps and Type 3 fonts, damaged on purpose.
+#[test]
+fn stage3c_hostile_fonts_do_not_crash() {
+    use folio_core::{Object, Stream};
+    let mut rng = Rng::new(0x5EED_F011_0000_003C);
+    let programs: Vec<(&str, Option<&str>, Vec<u8>)> = vec![
+        ("FontFile2", None, samples::tiny_truetype()),
+        ("FontFile3", Some("Type1C"), samples::tiny_cff()),
+        ("FontFile3", Some("OpenType"), samples::tiny_truetype()),
+        ("FontFile", None, samples::tiny_type1()),
+    ];
+    let n = (iterations() / 4).max(50);
+    for i in 0..n {
+        let (key, sub, base) = &programs[i % programs.len()];
+        let data = mutate(base, &mut rng);
+        let mut doc = Document::new();
+        let mut sd = Dict::new();
+        if let Some(s) = sub {
+            sd.set("Subtype", Object::name(s));
+        }
+        let file = doc.add(Object::Stream(Stream { dict: sd, data }));
+        let mut desc = Dict::new();
+        desc.set("Flags", Object::Int((i % 64) as i64));
+        desc.set(*key, file.into());
+        let desc = doc.add(desc.into());
+        let cmap = doc.add(Object::Stream(Stream {
+            dict: Dict::new(),
+            data: mutate(
+                b"1 begincodespacerange <00> <FFFF> endcodespacerange 1 begincidrange <0000> <FFFF> 0 endcidrange",
+                &mut rng,
+            ),
+        }));
+        let mut cid = Dict::new();
+        let cid_kind = if *key == "FontFile2" {
+            "CIDFontType2"
+        } else {
+            "CIDFontType0"
+        };
+        cid.set("Subtype", Object::name(cid_kind));
+        cid.set("FontDescriptor", desc.into());
+        cid.set(
+            "W",
+            Object::Array(vec![Object::Int(0), Object::Int(65535), Object::Int(500)]),
+        );
+        let cid = doc.add(cid.into());
+        let mut t0 = Dict::new();
+        t0.set("Subtype", Object::name("Type0"));
+        t0.set("Encoding", cmap.into());
+        t0.set("DescendantFonts", Object::Array(vec![cid.into()]));
+        let mut simple = Dict::new();
+        let simple_kind = if *key == "FontFile2" {
+            "TrueType"
+        } else {
+            "Type1"
+        };
+        simple.set("Subtype", Object::name(simple_kind));
+        simple.set("FontDescriptor", desc.into());
+        let mut enc = Dict::new();
+        enc.set(
+            "Differences",
+            Object::Array(vec![
+                Object::Int(-5),
+                Object::name("A"),
+                Object::Int(300),
+                Object::name("uniZZZZ"),
+            ]),
+        );
+        simple.set("Encoding", enc.into());
+        // A Type 3 font whose glyph shows itself again.
+        let mut t3 = Dict::new();
+        t3.set("Subtype", Object::name("Type3"));
+        t3.set(
+            "FontMatrix",
+            Object::Array([1, 0, 0, 1, 0, 0].iter().map(|&v| Object::Int(v)).collect()),
+        );
+        let glyph = doc.add(Object::Stream(Stream {
+            dict: Dict::new(),
+            data: b"BT /F3 1 Tf (A) Tj ET 0 0 1 1 re f".to_vec(),
+        }));
+        let mut procs = Dict::new();
+        procs.set("A", glyph.into());
+        t3.set("CharProcs", procs.into());
+        let mut e3 = Dict::new();
+        e3.set(
+            "Differences",
+            Object::Array(vec![Object::Int(65), Object::name("A")]),
+        );
+        t3.set("Encoding", e3.into());
+        let t3r = doc.add(Object::Null);
+        let mut fonts = Dict::new();
+        let f0 = doc.add(t0.into());
+        let f1 = doc.add(simple.into());
+        fonts.set("F0", f0.into());
+        fonts.set("F1", f1.into());
+        fonts.set("F3", t3r.into());
+        let mut r3 = Dict::new();
+        r3.set("Font", fonts.clone().into());
+        t3.set("Resources", r3.into());
+        doc.objects.insert(t3r.num, t3.into());
+        let mut res = Dict::new();
+        res.set("Font", fonts.into());
+        let content = b"BT /F0 40 Tf 10 10 Td <00410042FFFF> Tj /F1 40 Tf (ABC\\377) Tj 7 Tr 5 Tr /F3 40 Tf (AAA) Tj ET";
+        doc.add_page([200.0, 200.0], content, res).unwrap();
+        let bytes = doc.to_bytes().unwrap();
+        let t = Instant::now();
+        let outcome = std::panic::catch_unwind(|| exercise_render(&bytes));
+        assert!(outcome.is_ok(), "hostile font {i} panicked");
+        assert!(
+            t.elapsed() < SLOW,
+            "hostile font {i} took {:?}",
+            t.elapsed()
+        );
+    }
+    eprintln!("stage 3c anti-crash: {n} hostile font programs");
 }

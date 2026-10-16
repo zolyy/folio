@@ -19,7 +19,13 @@ brings it, **Folio choice** = not documented publicly.
 | JPEG 2000 (JPX, incl. SMaskInData), JBIG2 (with globals) | ✔ 3b, decoded by hayro; covered by the anti-crash gate, no generated samples yet |
 | Stencil masks (ImageMask), colour-key masks, explicit masks, soft masks (SMask) | ✔ 3b |
 | Image smoothing: smooth when shrinking, crisp when enlarging unless /Interpolate | ✔ 3b |
-| Text and fonts | 3c |
+| Text: all text operators, spacing, horizontal scaling, rise, leading, TJ kerning | ✔ 3c |
+| Text rendering modes 0–7 (fill, stroke, invisible, clip) | ✔ 3c |
+| TrueType, OpenType (glyf and CFF), bare CFF (Type1C, CIDFontType0C), Type 1 (PFA/PFB, eexec, flex, seac), Type 3 | ✔ 3c, each tested with a synthetic font and against Poppler |
+| Composite fonts: Identity-H/V, embedded CMaps, CIDToGIDMap, CID-keyed CFF, W/DW widths | ✔ 3c (vertical writing is drawn horizontally for now) |
+| Encodings: Standard, WinAnsi, MacRoman, Differences, TrueType cmap rules (3,1)/(3,0)/(1,0)/post | ✔ 3c |
+| Fonts not embedded (standard 14 and others): drawn with an installed metric-compatible font, stretched to the PDF widths | ✔ 3c (**Folio choice**; Acrobat uses its own bundled fonts) |
+| Predefined CJK CMaps (UniGB, UniJIS...) | later: needs CMap resources |
 | Shadings, patterns, transparency groups, soft masks | 3d |
 | ICC colour management (CMYK through a press profile, as Acrobat does) | later (print.convert-colors); Folio converts DeviceCMYK with the simple formula until then, so CMYK colours look brighter than in Acrobat |
 | Overprint preview | later (print.output-preview) |
@@ -31,7 +37,8 @@ brings it, **Folio choice** = not documented publicly.
 | Smooth line art | ✔ on by default; `--no-smooth-line-art` |
 | Enhance thin lines | ✔ on by default; `--no-enhance-thin-lines` |
 | Smooth images | ✔ on by default; `--no-smooth-images` |
-| Smooth text | 3c |
+| Smooth text | ✔ on by default; `--no-smooth-text` |
+| (Folio) installed fonts for missing fonts | ✔ on by default; `--no-system-fonts` |
 | Resolution | ✔ `--dpi` |
 
 ## export.images — Export PDF → Image

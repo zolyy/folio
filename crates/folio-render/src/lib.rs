@@ -9,6 +9,7 @@
 //! be drawn yet is skipped and counted in [`Rendered::skipped`].
 
 pub mod color;
+pub mod font;
 pub mod function;
 pub mod image;
 mod interp;
@@ -31,6 +32,11 @@ pub struct Options {
     pub enhance_thin_lines: bool,
     /// "Smooth images".
     pub smooth_images: bool,
+    /// "Smooth text".
+    pub smooth_text: bool,
+    /// Draw fonts the PDF does not embed with a metric-compatible font
+    /// installed on this computer (never copied or shipped).
+    pub system_fonts: bool,
     /// Paint the page white first (off = transparent background).
     pub white_background: bool,
 }
@@ -42,6 +48,8 @@ impl Default for Options {
             smooth_line_art: true,
             enhance_thin_lines: true,
             smooth_images: true,
+            smooth_text: true,
+            system_fonts: true,
             white_background: true,
         }
     }

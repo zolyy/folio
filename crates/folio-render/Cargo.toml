@@ -14,6 +14,7 @@ hayro-ccitt = "0.4"
 hayro-jbig2 = "0.3"
 hayro-jpeg2000 = "0.4"
 tiny-skia = "0.12"
+ttf-parser = "0.25.1"
 zune-jpeg = "0.4"
 
 [lints]
@@ -23,3 +24,4 @@ workspace = true
 fax = "0.3"
 jpeg-encoder = "0.6"
 tiny-skia = "0.12"
+ttf-parser = "0.25.1"

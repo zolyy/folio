@@ -12,7 +12,9 @@ Read `AGENTS.md` first; it wins over this file. The plan and stages are in `PLAN
   crop), `merge`, `split`, `labels`, `outline`, `meta` (Info+XMP), `info`, `compress`,
   `text`, `ranges`, `samples` (generated test documents).
 - `crates/folio-render` — `interp` (content streams, graphics state, painting, clipping,
-  forms), `color` (colour spaces), `function` (types 0/2/3/4), `samples`. Not-yet-drawn
+  forms, text), `color`, `function` (types 0/2/3/4), `image` (codecs, masks), `font`
+  (`mod` encodings and glyph lookup, `type1`, `cmap`, `system` installed-font substitutes),
+  `samples` (synthetic fonts and pages). Not-yet-drawn
   content is counted in `Rendered::skipped`, never silently dropped.
 - `docs/acrobat/` — Acrobat Pro's options per feature and how Folio maps them. Read it
   before changing a feature; keep it current.
