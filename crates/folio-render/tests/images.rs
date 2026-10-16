@@ -150,3 +150,111 @@ fn images_match_poppler() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A page with one JPEG image (16 × 16, one colour) filling 100 × 100 pt.
+fn jpeg_page(data: Vec<u8>, cs: &str) -> folio_core::Document {
+    let mut doc = folio_core::Document::new();
+    let img = doc.add(common::image_stream(
+        &[
+            ("Width", common::int(16)),
+            ("Height", common::int(16)),
+            ("ColorSpace", common::name(cs)),
+            ("BitsPerComponent", common::int(8)),
+            ("Filter", common::name("DCTDecode")),
+        ],
+        data,
+    ));
+    let mut xo = folio_core::Dict::new();
+    xo.set("I", img.into());
+    let mut res = folio_core::Dict::new();
+    res.set("XObject", xo.into());
+    doc.add_page([100.0, 100.0], b"100 0 0 100 0 0 cm /I Do", res)
+        .unwrap();
+    doc
+}
+
+/// Regression (stage 3e): JPEGs with optimised Huffman tables, as Photoshop
+/// and many cameras write them, came out washed-out pink instead of red with
+/// the previous decoder (zune-jpeg 0.4). Checked against libjpeg via Poppler.
+#[test]
+fn jpeg_with_optimised_huffman_tables_keeps_its_colours() {
+    use folio_render::export::{ColorMode, Format, JpegMode, Quality, Settings, encode};
+    // The stage-3a page (306 × 396 at 36 dpi), saved as an optimised JPEG:
+    // the image that came out pink with zune-jpeg 0.4.
+    let vec_doc = folio_render::samples::vector().unwrap();
+    let p = vec_doc.pages().unwrap()[0];
+    let opts = Options {
+        dpi: 36.0,
+        ..Options::default()
+    };
+    let pm = render_page(&vec_doc, p, &opts).unwrap().pixmap;
+    let s = Settings {
+        format: Format::Jpeg(Quality::High, JpegMode::Optimized),
+        color: ColorMode::Rgb,
+        dpi: 36.0,
+    };
+    let jpeg = encode(&pm, &s).unwrap();
+    let mut doc = folio_core::Document::new();
+    let img = doc.add(common::image_stream(
+        &[
+            ("Width", common::int(306)),
+            ("Height", common::int(396)),
+            ("ColorSpace", common::name("DeviceRGB")),
+            ("BitsPerComponent", common::int(8)),
+            ("Filter", common::name("DCTDecode")),
+        ],
+        jpeg,
+    ));
+    let mut xo = folio_core::Dict::new();
+    xo.set("I", img.into());
+    let mut res = folio_core::Dict::new();
+    res.set("XObject", xo.into());
+    doc.add_page([306.0, 396.0], b"306 0 0 396 0 0 cm /I Do", res)
+        .unwrap();
+    let r = render(&doc);
+    near(&r, 86, 335, [254, 0, 0], 6); // the red rectangle
+}
+
+/// CMYK JPEGs (Adobe APP14) must come out like Poppler/libjpeg draws them.
+#[test]
+fn cmyk_jpeg_matches_poppler() {
+    if std::process::Command::new("pdftoppm")
+        .arg("-v")
+        .output()
+        .is_err()
+    {
+        eprintln!("pdftoppm not installed; skipped");
+        return;
+    }
+    let mut data = Vec::new();
+    let enc = jpeg_encoder::Encoder::new(&mut data, 95);
+    let px: Vec<u8> = (0..256).flat_map(|_| [0u8, 255, 255, 0]).collect();
+    enc.encode(&px, 16, 16, jpeg_encoder::ColorType::Cmyk)
+        .unwrap();
+    let doc = jpeg_page(data, "DeviceCMYK");
+    let dir = std::env::temp_dir().join(format!("folio-cmyk-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    doc.save(dir.join("c.pdf")).unwrap();
+    let st = std::process::Command::new("pdftoppm")
+        .args(["-r", "72", "-png", "-singlefile"])
+        .arg(dir.join("c.pdf"))
+        .arg(dir.join("p"))
+        .status()
+        .unwrap();
+    assert!(st.success());
+    let theirs = tiny_skia::Pixmap::load_png(dir.join("p.png")).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let t = theirs.pixel(50, 50).unwrap().demultiply();
+    let ours = render(&doc);
+    let [r, g, b, _] = ours.rgba(50, 50).unwrap();
+    // Poppler converts CMYK through its own approximation; the hue must agree.
+    let hue = |r: u8, g: u8, b: u8| (r > 150, g > 150, b > 150);
+    assert_eq!(
+        hue(r, g, b),
+        hue(t.red(), t.green(), t.blue()),
+        "ours ({r},{g},{b}) vs Poppler ({},{},{})",
+        t.red(),
+        t.green(),
+        t.blue()
+    );
+}

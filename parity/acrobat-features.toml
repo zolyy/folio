@@ -19,7 +19,7 @@ notes = "Opens and repairs classic and compressed (PDF 1.5+) files. Missing: enc
 id = "view.render"
 name = "Randare pagini: text, vectori, imagini, transparență, culori"
 status = "partial"
-evidence = ["fills_strokes_and_even_odd", "clipping_limits_painting", "colour_spaces_cmyk_separation_devicen", "constant_alpha_from_extgstate", "form_xobjects_use_matrix_and_bbox", "dashed_lines", "page_rotation_and_resolution", "matches_poppler_rendering", "stage3a_mutated_documents_do_not_crash", "raw_rgb_image_rows_start_at_the_top", "bit_depths_decode_arrays_and_indexed_colour", "stencil_masks_paint_the_fill_colour", "jpeg_colour_and_gray", "soft_masks_and_colour_key_masks", "ccitt_group4_fax_images", "inline_images_raw_and_filtered", "images_match_poppler", "stage3b_hostile_images_do_not_crash", "truetype_glyphs_and_advance_widths", "bare_cff_type1_and_type3_fonts", "composite_identity_h_font", "text_rendering_modes_stroke_and_clip", "text_matches_poppler", "stage3c_hostile_fonts_do_not_crash", "axial_shading_with_extend", "radial_shading_from_a_point", "function_based_shading_with_matrix", "gouraud_triangle_and_coons_patch_meshes", "tiling_patterns_coloured_and_uncoloured", "shading_pattern_fill", "luminosity_soft_mask", "transparency_group_alpha_applies_to_the_whole_group", "annotation_appearances_and_hidden_flag", "shading_page_matches_poppler", "stage3d_hostile_shading_and_transparency_do_not_crash", "glyph_with_absurd_outline_is_skipped_not_fatal"]
+evidence = ["fills_strokes_and_even_odd", "clipping_limits_painting", "colour_spaces_cmyk_separation_devicen", "constant_alpha_from_extgstate", "form_xobjects_use_matrix_and_bbox", "dashed_lines", "page_rotation_and_resolution", "matches_poppler_rendering", "stage3a_mutated_documents_do_not_crash", "raw_rgb_image_rows_start_at_the_top", "bit_depths_decode_arrays_and_indexed_colour", "stencil_masks_paint_the_fill_colour", "jpeg_colour_and_gray", "soft_masks_and_colour_key_masks", "ccitt_group4_fax_images", "inline_images_raw_and_filtered", "images_match_poppler", "stage3b_hostile_images_do_not_crash", "truetype_glyphs_and_advance_widths", "bare_cff_type1_and_type3_fonts", "composite_identity_h_font", "text_rendering_modes_stroke_and_clip", "text_matches_poppler", "stage3c_hostile_fonts_do_not_crash", "axial_shading_with_extend", "radial_shading_from_a_point", "function_based_shading_with_matrix", "gouraud_triangle_and_coons_patch_meshes", "tiling_patterns_coloured_and_uncoloured", "shading_pattern_fill", "luminosity_soft_mask", "transparency_group_alpha_applies_to_the_whole_group", "annotation_appearances_and_hidden_flag", "shading_page_matches_poppler", "stage3d_hostile_shading_and_transparency_do_not_crash", "glyph_with_absurd_outline_is_skipped_not_fatal", "jpeg_with_optimised_huffman_tables_keeps_its_colours", "cmyk_jpeg_matches_poppler"]
 notes = "Stages 3a-3d: vector graphics, images of every kind, text with every font kind, shadings 1-7, tiling and shading patterns, soft masks, transparency groups, annotation appearances; matches Poppler on generated samples and on a real InDesign brochure. Missing: knockout and non-isolated groups (drawn isolated), overprint, vertical writing, predefined CJK CMaps, ICC colour management (CMYK uses the simple formula). JPEG 2000 and JBIG2 only covered by the anti-crash gate."
 
 [[feature]]
@@ -144,8 +144,8 @@ notes = "Original range replaced from a start page of another file."
 id = "organize.crop"
 name = "Decupare pagini (CropBox)"
 status = "partial"
-evidence = ["crop_margins_respect_rotation_box_kind_and_reset", "cli_crop_labels_meta_compress_text"]
-notes = "Crop/Art/Trim/Bleed boxes, margins in pt/in/mm/cm relative to the displayed page, range, even/odd, set to zero. Missing: remove white margins (stage 3), change page size (stage 7)."
+evidence = ["crop_margins_respect_rotation_box_kind_and_reset", "cli_crop_labels_meta_compress_text", "cli_crop_removes_white_margins"]
+notes = "Crop/Art/Trim/Bleed boxes, margins in pt/in/mm/cm relative to the displayed page, range, even/odd, set to zero, remove white margins. Missing: change page size (stage 7)."
 
 [[feature]]
 id = "organize.page-labels"
@@ -401,8 +401,8 @@ status = "planned"
 id = "export.images"
 name = "Export pagini ca PNG / JPEG / TIFF"
 status = "partial"
-evidence = ["cli_render_writes_png_pages", "page_rotation_and_resolution"]
-notes = "PNG with resolution and page range, smooth line art and thin-line options. Missing: JPEG and TIFF, colour-space choice (stage 3e), and everything 3b-3d adds to the picture."
+evidence = ["cli_render_writes_png_pages", "page_rotation_and_resolution", "png_colour_spaces_filters_and_resolution", "determine_automatically_picks_gray_for_pages_without_colour", "jpeg_quality_modes_and_colour_spaces", "tiff_none_lzw_zip_in_rgb_gray_and_cmyk", "tiff_ccitt_group4_for_monochrome", "cli_export_jpeg_tiff_and_png_with_acrobat_settings"]
+notes = "PNG, JPEG and TIFF with Acrobat's settings: colour space (automatic, RGB, CMYK, grayscale, monochrome), resolution written into the file, JPEG quality and baseline/optimised/progressive, PNG filters, TIFF none/LZW/ZIP/CCITT G4. Missing: JPEG 2000 output, PNG interlacing, TIFF JPEG and CCITT G3 compression, ICC conversion for CMYK."
 
 [[feature]]
 id = "export.text"

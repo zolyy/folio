@@ -12,3 +12,4 @@ which appends a line here only when every mutant passed.
 | 2026-10-15 | Etapa 3b — imagini | 20000 | passed |
 | 2026-10-16 | Etapa 3c — text și fonturi | 20000 | passed |
 | 2026-10-16 | Etapa 3d — umbriri, pattern-uri, transparență, adnotări | 20000 | passed |
+| 2026-10-16 | Etapa 3e — export imagine (închide Etapa 3) | 20000 | passed |
