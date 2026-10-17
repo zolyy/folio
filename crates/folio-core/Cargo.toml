@@ -12,7 +12,7 @@ authors.workspace = true
 aes = "0.8"
 cbc = { version = "0.1", features = ["block-padding"] }
 cipher = { version = "0.4", features = ["std", "block-padding"] }
-getrandom = "0.2"
+getrandom = "0.4"
 md-5 = "0.10"
 miniz_oxide.workspace = true
 sha2 = "0.10"
