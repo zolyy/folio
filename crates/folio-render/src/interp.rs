@@ -27,6 +27,8 @@ const MAX_FORM_DEPTH: usize = 16;
 const MAX_PAGE_IMAGE_PIXELS: u64 = 400_000_000;
 /// Transparency layers (groups, soft masks) only for pages up to this size.
 const MAX_LAYER_PIXELS: u64 = 40_000_000;
+/// Glyphs recorded per page for search and selection.
+const MAX_GLYPHS: usize = 1_000_000;
 /// Path segments per path.
 const MAX_SEGMENTS: usize = 1_000_000;
 
@@ -204,6 +206,10 @@ struct Ctx<'a> {
     /// Uncoloured tiling patterns paint in this colour.
     forced: Option<Color>,
     pattern_depth: usize,
+    /// Glyphs recorded for search and selection (points, displayed page).
+    text: Vec<crate::text::Glyph>,
+    /// Device pixels per point.
+    px_per_pt: f32,
 }
 
 pub fn render(doc: &Document, page: ObjRef, opts: &Options) -> Result<Rendered> {
@@ -230,6 +236,8 @@ pub fn render(doc: &Document, page: ObjRef, opts: &Options) -> Result<Rendered> 
         base: geo.base,
         forced: None,
         pattern_depth: 0,
+        text: Vec::new(),
+        px_per_pt: (opts.dpi / 72.0) as f32,
     };
     let res = doc
         .page_attr(page, b"Resources")
@@ -243,6 +251,7 @@ pub fn render(doc: &Document, page: ObjRef, opts: &Options) -> Result<Rendered> 
     Ok(Rendered {
         pixmap: ctx.pixmap,
         skipped: ctx.skipped.into_iter().collect(),
+        text: ctx.text,
     })
 }
 
@@ -951,11 +960,34 @@ impl Ctx<'_> {
                 }
             }
             let w = font.width(code, len) as f32;
+            if self.opts.collect_text && self.text.len() < MAX_GLYPHS {
+                self.record_glyph(&font, code, w, gs.ctm.pre_concat(text_to_user));
+            }
             let mut tx = w * size + gs.char_space;
             if len == 1 && code == 32 {
                 tx += gs.word_space;
             }
             *tm = tm.pre_concat(Transform::from_translate(finite(f64::from(tx * hs)), 0.0));
+        }
+    }
+
+    /// Remember a shown glyph and its em box (from the descender to the
+    /// ascender line) on the displayed page, in points.
+    fn record_glyph(&mut self, font: &PdfFont, code: u32, w: f32, trm: Transform) {
+        let text = font.unicode(code);
+        if text.is_empty() {
+            return;
+        }
+        let w = if w > 0.0 { w } else { 0.3 };
+        let s = self.px_per_pt.max(1e-6);
+        let map = |x: f32, y: f32| {
+            let mut p = [tiny_skia::Point::from_xy(x, y)];
+            trm.map_points(&mut p);
+            [p[0].x / s, p[0].y / s]
+        };
+        let quad = [map(0.0, -0.2), map(w, -0.2), map(w, 0.8), map(0.0, 0.8)];
+        if quad.iter().flatten().all(|v| v.is_finite()) {
+            self.text.push(crate::text::Glyph { text, quad });
         }
     }
 

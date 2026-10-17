@@ -273,3 +273,42 @@ fn stage4a_window_on_mutated_documents() {
     }
     eprintln!("stage 4a anti-crash (whole window): {n} mutants, slowest {worst:?}");
 }
+
+/// Stage 4b: read the text, search with random queries, step through the
+/// matches and select across pages, on mutated documents.
+#[test]
+fn stage4b_find_and_selection_on_mutated_documents() {
+    use folio_app::find::{FindState, Selection, from_view, to_view};
+    let bases = bases();
+    let n = (iterations() / 10).max(50);
+    let mut rng = Rng::new(0x5EED_F011_0000_004B);
+    for i in 0..n {
+        let input = mutate(&bases[i % bases.len()], &mut rng);
+        let Ok(doc) = folio_core::Document::from_bytes(&input) else {
+            continue;
+        };
+        let mut t = Tab::new(doc, None, "m.pdf".into(), 1);
+        let (d, p) = (t.doc.clone(), t.pages.clone());
+        t.index.fill_now(&d, &p[..p.len().min(6)]);
+        let mut f = FindState::default();
+        for _ in 0..6 {
+            f.query = random_text(&mut rng);
+            f.whole_words = rng.below(2) == 0;
+            f.case_sensitive = rng.below(2) == 0;
+            f.refresh(t.id, &t.index);
+            let _ = f.next(rng.below(t.page_count() + 3));
+            let _ = f.previous(rng.below(t.page_count() + 3));
+            let _ = f.status(&t.index);
+        }
+        let pick = |rng: &mut Rng| (rng.below(t.page_count() + 3), rng.next_u64() as usize);
+        let s = Selection {
+            anchor: pick(&mut rng),
+            head: pick(&mut rng),
+        };
+        let _ = s.text(&t.index);
+        for r in [0u16, 90, 180, 270, 45, u16::MAX] {
+            let v = to_view([f32::NAN, 1e30], [0.0, -5.0], r);
+            let _ = from_view(v, [1e-30, 1e30], r);
+        }
+    }
+}

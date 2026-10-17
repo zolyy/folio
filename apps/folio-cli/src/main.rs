@@ -395,6 +395,21 @@ enum Cmd {
         #[command(flatten)]
         out: Out,
     },
+    /// Find text (Acrobat's Find): every match with its page and position.
+    Find {
+        file: PathBuf,
+        /// The words or phrase to find.
+        query: String,
+        /// Whole words only.
+        #[arg(long)]
+        whole_words: bool,
+        /// Case-sensitive.
+        #[arg(long)]
+        case_sensitive: bool,
+        /// Page range to search (default: all).
+        #[arg(long, default_value = "")]
+        pages: String,
+    },
     /// Export pages as images (Export PDF → Image): PNG, JPEG or TIFF.
     /// Files are `<name>_Page_<n>.<ext>`.
     Render {
@@ -1244,6 +1259,83 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
 
+        Cmd::Find {
+            file,
+            query,
+            whole_words,
+            case_sensitive,
+            pages: spec,
+        } => {
+            let doc = load(file)?;
+            // Finding reads the text, like copying it (Folio choice).
+            need(&doc, Need::Copy, file)?;
+            let list = e(doc.pages())?;
+            let idx = e(ranges::parse(spec, list.len()))?;
+            let opts = folio_render::text::FindOptions {
+                whole_words: *whole_words,
+                case_sensitive: *case_sensitive,
+            };
+            let mut hits = Vec::new();
+            for i in idx {
+                let Some(&page) = list.get(i) else { continue };
+                let t = e(folio_render::page_text(&doc, page))?;
+                for r in folio_render::text::find(&t, query, opts) {
+                    let found = folio_render::text::slice(&t, r.clone());
+                    // A little context on each side, on one line.
+                    let before = folio_render::text::slice(&t, r.start.saturating_sub(30)..r.start);
+                    let after = folio_render::text::slice(&t, r.end..r.end + 30);
+                    let quads = folio_render::text::quads(&t, r);
+                    hits.push((i + 1, found, before, after, quads));
+                }
+            }
+            if cli.json {
+                let items: Vec<String> = hits
+                    .iter()
+                    .map(|(p, f, b, a, q)| {
+                        let rects: Vec<String> = q
+                            .iter()
+                            .map(|q| {
+                                let xs = q.iter().map(|v| v[0]);
+                                let ys = q.iter().map(|v| v[1]);
+                                json::arr(&[
+                                    json::n(f64::from(xs.clone().fold(f32::MAX, f32::min))),
+                                    json::n(f64::from(ys.clone().fold(f32::MAX, f32::min))),
+                                    json::n(f64::from(xs.fold(f32::MIN, f32::max))),
+                                    json::n(f64::from(ys.fold(f32::MIN, f32::max))),
+                                ])
+                            })
+                            .collect();
+                        json::obj(&[
+                            ("page", p.to_string()),
+                            ("text", json::s(f)),
+                            ("before", json::s(b)),
+                            ("after", json::s(a)),
+                            ("rects", json::arr(&rects)),
+                        ])
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    json::obj(&[
+                        ("ok", "true".into()),
+                        ("matches", hits.len().to_string()),
+                        ("results", json::arr(&items)),
+                    ])
+                );
+            } else {
+                let flat = |s: &str| s.replace(['\n', '\r'], " ");
+                for (p, f, b, a, _) in &hits {
+                    println!("page {p}: …{}[{}]{}…", flat(b), flat(f), flat(a));
+                }
+                println!(
+                    "{} match{}",
+                    hits.len(),
+                    if hits.len() == 1 { "" } else { "es" }
+                );
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
         Cmd::Render {
             file,
             pages: spec,
@@ -1327,6 +1419,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
                 system_fonts: !no_system_fonts,
                 annotations: !no_annotations,
                 white_background: !transparent,
+                collect_text: false,
             };
             let dir = dir_of(file, out_dir);
             let base = stem(file);
