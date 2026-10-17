@@ -43,6 +43,82 @@ pub fn top_level(doc: &Document) -> Vec<Bookmark> {
         .collect()
 }
 
+/// More nested levels than this are not shown (hostile files nest forever).
+const MAX_DEPTH: usize = 64;
+
+/// One bookmark with its children, as the Bookmarks panel shows it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OutlineNode {
+    pub title: String,
+    /// The page the bookmark goes to, if it can be resolved.
+    pub page: Option<ObjRef>,
+    /// Shown expanded when the file opens (`/Count` > 0, §12.3.3).
+    pub open: bool,
+    pub children: Vec<OutlineNode>,
+}
+
+/// The whole bookmark tree, in order. Cycles, broken links and absurd depth
+/// or size are cut off, never followed.
+pub fn tree(doc: &Document) -> Vec<OutlineNode> {
+    let Ok(cat) = doc.catalog() else {
+        return Vec::new();
+    };
+    let Some(root) = doc.resolve_key(cat, b"Outlines").and_then(Object::as_dict) else {
+        return Vec::new();
+    };
+    let mut seen = HashSet::new();
+    let mut budget = MAX_ITEMS;
+    level(
+        doc,
+        root.get(b"First").and_then(Object::as_objref),
+        0,
+        &mut seen,
+        &mut budget,
+    )
+}
+
+fn level(
+    doc: &Document,
+    first: Option<ObjRef>,
+    depth: usize,
+    seen: &mut HashSet<u32>,
+    budget: &mut usize,
+) -> Vec<OutlineNode> {
+    let mut out = Vec::new();
+    if depth >= MAX_DEPTH {
+        return out;
+    }
+    let mut cur = first;
+    while let Some(r) = cur {
+        if *budget == 0 || !seen.insert(r.num) {
+            break;
+        }
+        *budget -= 1;
+        let Some(d) = doc.get(r).and_then(Object::as_dict) else {
+            break;
+        };
+        let children = level(
+            doc,
+            d.get(b"First").and_then(Object::as_objref),
+            depth + 1,
+            seen,
+            budget,
+        );
+        out.push(OutlineNode {
+            title: doc
+                .resolve_key(d, b"Title")
+                .and_then(Object::as_str)
+                .map(decode_text)
+                .unwrap_or_default(),
+            page: item_page(doc, d),
+            open: matches!(doc.resolve_key(d, b"Count"), Some(Object::Int(n)) if *n > 0),
+            children,
+        });
+        cur = d.get(b"Next").and_then(Object::as_objref);
+    }
+    out
+}
+
 /// An outline item and the items after it, following `/Next`.
 pub fn siblings(doc: &Document, first: Option<ObjRef>) -> Vec<ObjRef> {
     let mut out = Vec::new();

@@ -46,6 +46,44 @@ fn rect_of(doc: &Document, o: &Object) -> Option<[f64; 4]> {
     }
 }
 
+/// The visible area of a page (crop box clipped to the media box, normalised)
+/// and its `/Rotate` as 0, 90, 180 or 270.
+pub(crate) fn visible_box(doc: &Document, page: ObjRef) -> ([f64; 4], i64) {
+    let media = {
+        let m = doc.media_box(page);
+        [
+            m[0].min(m[2]),
+            m[1].min(m[3]),
+            m[0].max(m[2]),
+            m[1].max(m[3]),
+        ]
+    };
+    let b = match doc
+        .page_attr(page, b"CropBox")
+        .and_then(|o| rect_of(doc, &o))
+    {
+        // The visible area is the crop box clipped to the media box.
+        Some(c) => [
+            c[0].max(media[0]),
+            c[1].max(media[1]),
+            c[2].min(media[2]),
+            c[3].min(media[3]),
+        ],
+        None => media,
+    };
+    let b = if b[2] - b[0] < 1.0 || b[3] - b[1] < 1.0 {
+        media
+    } else {
+        b
+    };
+    let rot = doc
+        .page_attr(page, b"Rotate")
+        .and_then(|o| o.as_int())
+        .unwrap_or(0)
+        .rem_euclid(360);
+    (b, rot - rot % 90)
+}
+
 impl PageGeometry {
     pub fn new(doc: &Document, page: ObjRef, dpi: f64) -> Result<Self> {
         if !dpi.is_finite() || !(1.0..=9600.0).contains(&dpi) {
@@ -53,40 +91,8 @@ impl PageGeometry {
                 "resolution must be between 1 and 9600 dpi, not {dpi}"
             )));
         }
-        let media = {
-            let m = doc.media_box(page);
-            [
-                m[0].min(m[2]),
-                m[1].min(m[3]),
-                m[0].max(m[2]),
-                m[1].max(m[3]),
-            ]
-        };
-        let b = match doc
-            .page_attr(page, b"CropBox")
-            .and_then(|o| rect_of(doc, &o))
-        {
-            // The visible area is the crop box clipped to the media box.
-            Some(c) => [
-                c[0].max(media[0]),
-                c[1].max(media[1]),
-                c[2].min(media[2]),
-                c[3].min(media[3]),
-            ],
-            None => media,
-        };
-        let b = if b[2] - b[0] < 1.0 || b[3] - b[1] < 1.0 {
-            media
-        } else {
-            b
-        };
+        let (b, rot) = visible_box(doc, page);
         let s = dpi / 72.0;
-        let rot = doc
-            .page_attr(page, b"Rotate")
-            .and_then(|o| o.as_int())
-            .unwrap_or(0)
-            .rem_euclid(360);
-        let rot = rot - rot % 90;
         let (w_pt, h_pt) = (b[2] - b[0], b[3] - b[1]);
         let (dw, dh) = if rot % 180 == 90 {
             (h_pt, w_pt)

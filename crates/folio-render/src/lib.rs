@@ -89,6 +89,14 @@ pub mod interp_for_tests {
     pub use crate::interp::render;
 }
 
+/// A page's visible size in points (width, height), its `/Rotate` applied:
+/// the size `render_page` draws at 72 dpi, before rounding to pixels.
+pub fn page_size_points(doc: &Document, page: ObjRef) -> (f64, f64) {
+    let (b, rot) = interp::visible_box(doc, page);
+    let (w, h) = (b[2] - b[0], b[3] - b[1]);
+    if rot % 180 == 90 { (h, w) } else { (w, h) }
+}
+
 /// The pixel size a page renders to at `dpi`, rotation applied.
 pub fn page_pixel_size(doc: &Document, page: ObjRef, dpi: f64) -> Result<(u32, u32)> {
     let geo = interp::PageGeometry::new(doc, page, dpi)?;
