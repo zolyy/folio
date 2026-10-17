@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["crates/folio-core", "crates/folio-ops", "crates/folio-render", "apps/folio-cli", "xtask"]
-default-members = ["crates/folio-core", "crates/folio-ops", "crates/folio-render", "apps/folio-cli"]
+members = ["crates/folio-core", "crates/folio-ops", "crates/folio-render", "apps/folio-cli", "apps/folio-app", "xtask"]
+default-members = ["crates/folio-core", "crates/folio-ops", "crates/folio-render", "apps/folio-cli", "apps/folio-app"]
 
 [workspace.package]
 version = "0.1.0"

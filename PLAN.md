@@ -326,6 +326,17 @@ Sub-etape (fiecare se închide cu propriul test anti-crash):
   căutare cu evidențiere, selectare/copiere, straturi, atașamente, proprietăți, mod întunecat.
 - Canal de control opțional pentru testare automată a interfeței.
 
+Sub-etape (fiecare se închide cu propriul test anti-crash; maparea Acrobat → Folio în
+`docs/acrobat/view.md`):
+- **4a — fereastra de citire:** deschidere (dialog, drag & drop, recente, parolă), taburi,
+  pagini continue, zoom și potriviri, rotire vizualizare, navigare, panouri de miniaturi și
+  semne de carte, randare în fundal cu cache.
+- **4b — căutare și selecție:** Find cu evidențiere, cuvinte întregi, majuscule; selectare
+  și copiere text.
+- **4c — afișare și panouri:** două pagini, ecran complet, mod citire, straturi, atașamente,
+  proprietăți, culori înlocuite (mod întunecat).
+- **4d — automatizare:** canal de control opțional, capturi de ecran pentru agenți.
+
 ### Etapa 5 — Comentarii
 - Toate tipurile de adnotări, fire de discuție, listă, import/export FDF/XFDF, aplatizare.
 
