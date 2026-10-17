@@ -12,7 +12,7 @@ rust-version = "1.88"
 authors = ["Folio contributors"]
 
 [workspace.dependencies]
-miniz_oxide = "0.8"
+miniz_oxide = "0.9"
 clap = { version = "4.5", features = ["derive", "env"] }
 folio-core = { path = "crates/folio-core" }
 folio-ops = { path = "crates/folio-ops" }

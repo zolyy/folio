@@ -332,7 +332,7 @@ dependencies = [
  "cipher",
  "getrandom",
  "md-5",
- "miniz_oxide 0.8.9",
+ "miniz_oxide 0.9.1",
  "sha2",
 ]
 
