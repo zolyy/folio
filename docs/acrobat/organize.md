@@ -84,7 +84,7 @@ stage that brings it.
 | Set to zero (remove the box) | ✔ `--reset` |
 | Page range All / From–To; Apply to even and odd / even / odd | ✔ `--pages`, `--subset` |
 | Margins measured from the MediaBox | ✔ |
-| Remove white margins | later (needs rendering, stage 3) |
+| Remove white margins | ✔ `--remove-white-margins` (each page cropped to its non-white content; blank pages unchanged) |
 | Change page size (enlarge MediaBox, offsets, centre) | later (stage 7) |
 
 ## organize.page-labels — Page Labels

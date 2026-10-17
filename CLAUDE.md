@@ -12,7 +12,9 @@ Read `AGENTS.md` first; it wins over this file. The plan and stages are in `PLAN
   crop), `merge`, `split`, `labels`, `outline`, `meta` (Info+XMP), `info`, `compress`,
   `text`, `ranges`, `samples` (generated test documents).
 - `crates/folio-render` — `interp` (content streams, graphics state, painting, clipping,
-  forms, text), `color`, `function` (types 0/2/3/4), `image` (codecs, masks), `font`
+  forms, text), `color`, `function` (types 0/2/3/4), `image` (codecs: jpeg-decoder for
+  JPEG, hayro-* for JPX/JBIG2/CCITT; masks), `export` (PNG/JPEG/TIFF, Folio-written TIFF),
+  `font`
   (`mod` encodings and glyph lookup, `type1`, `cmap`, `system` installed-font substitutes),
   `shading` (types 1-7, per-pixel and Gouraud), `samples` (synthetic fonts and pages).
   Patterns, soft masks, groups and annotations live in `interp` (`paint_pattern`,

@@ -3,7 +3,7 @@
 //! masks and soft masks. The result is an RGBA pixmap in image space.
 //!
 //! JPEG, JPEG 2000, JBIG2 and CCITT data go through pure-Rust decoders
-//! (zune-jpeg, hayro-*). Each call into them sits behind `catch_unwind`, so
+//! (jpeg-decoder, hayro-*). Each call into them sits behind `catch_unwind`, so
 //! a bug in a decoder becomes "image not drawn", never a crash.
 
 use std::collections::HashMap;
@@ -343,43 +343,43 @@ fn guard(f: impl FnOnce() -> Result<Samples, String>) -> Result<Samples, String>
 }
 
 fn jpeg(data: &[u8], w: u32, h: u32) -> Result<Samples, String> {
-    use zune_jpeg::JpegDecoder;
-    use zune_jpeg::zune_core::colorspace::ColorSpace as Zcs;
-    use zune_jpeg::zune_core::options::DecoderOptions;
-    let opts = DecoderOptions::default()
-        .set_max_width((w as usize).max(1) * 2)
-        .set_max_height((h as usize).max(1) * 2);
-    let mut dec = JpegDecoder::new_with_options(data, opts);
-    dec.decode_headers().map_err(|e| format!("JPEG: {e:?}"))?;
-    let input = dec.get_input_colorspace();
-    let opts = DecoderOptions::default()
-        .set_max_width((w as usize).max(1) * 2)
-        .set_max_height((h as usize).max(1) * 2)
-        .jpeg_set_out_colorspace(match input {
-            Some(Zcs::Luma) => Zcs::Luma,
-            Some(Zcs::CMYK | Zcs::YCCK) => Zcs::CMYK,
-            _ => Zcs::RGB,
-        });
-    let mut dec = JpegDecoder::new_with_options(data, opts);
-    let pixels = dec.decode().map_err(|e| format!("JPEG: {e:?}"))?;
+    let mut dec = jpeg_decoder::Decoder::new(data);
+    // Never allocate more than the largest image Folio accepts.
+    let cap = usize::try_from(MAX_IMAGE_PIXELS.saturating_mul(4)).unwrap_or(usize::MAX);
+    dec.set_max_decoding_buffer_size(cap);
+    dec.read_info().map_err(|e| format!("JPEG: {e}"))?;
     let info = dec.info().ok_or("JPEG without a header")?;
-    let comps = match dec.get_output_colorspace() {
-        Some(Zcs::Luma) => 1,
-        Some(Zcs::CMYK) => 4,
-        _ => 3,
-    };
     let (width, height) = (u32::from(info.width), u32::from(info.height));
-    let mut data = pixels;
-    if comps == 4 {
-        // Adobe CMYK JPEGs store inverted values (APP14 transform).
-        data.iter_mut().for_each(|b| *b = 255 - *b);
+    if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
+        return Err("JPEG image larger than 100 megapixels".into());
+    }
+    let _ = (w, h);
+    let pixels = dec.decode().map_err(|e| format!("JPEG: {e}"))?;
+    let (comps, data16) = match info.pixel_format {
+        jpeg_decoder::PixelFormat::L8 => (1, false),
+        jpeg_decoder::PixelFormat::L16 => (1, true),
+        jpeg_decoder::PixelFormat::RGB24 => (3, false),
+        jpeg_decoder::PixelFormat::CMYK32 => (4, false),
+    };
+    let mut out = if data16 {
+        // 16-bit samples, big-endian: keep the high byte.
+        pixels
+            .chunks(2)
+            .map(|c| c.first().copied().unwrap_or(0))
+            .collect()
+    } else {
+        pixels
+    };
+    if comps == 4 && has_adobe_marker(data) {
+        // Adobe CMYK JPEGs store inverted values (APP14), as other PDF readers assume.
+        out.iter_mut().for_each(|b| *b = 255 - *b);
     }
     Ok(Samples {
         width,
         height,
         comps,
         bpc: 8,
-        data,
+        data: out,
         alpha: None,
         native: Some(match comps {
             1 => ColorSpace::Gray,
@@ -387,6 +387,14 @@ fn jpeg(data: &[u8], w: u32, h: u32) -> Result<Samples, String> {
             _ => ColorSpace::Rgb,
         }),
     })
+}
+
+/// Whether a JPEG carries Adobe's APP14 segment (FF EE "Adobe").
+fn has_adobe_marker(data: &[u8]) -> bool {
+    // FF EE, a two-byte length, then the ASCII "Adobe".
+    let head = data.get(..data.len().min(64 * 1024)).unwrap_or_default();
+    head.windows(9)
+        .any(|w| w.get(..2) == Some(&[0xFF, 0xEE][..]) && w.get(4..9) == Some(&b"Adobe"[..]))
 }
 
 fn jpx(data: &[u8], is_mask: bool) -> Result<Samples, String> {

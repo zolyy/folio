@@ -9,6 +9,7 @@
 //! be drawn yet is skipped and counted in [`Rendered::skipped`].
 
 pub mod color;
+pub mod export;
 pub mod font;
 pub mod function;
 pub mod image;

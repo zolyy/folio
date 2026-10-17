@@ -40,7 +40,33 @@ fn exercise_render(bytes: &[u8]) {
             };
             if let Ok(r) = folio_render::interp_for_tests::render(&doc, p, &opts) {
                 let _ = r.rgba(0, 0);
+                export_all(&r.pixmap);
             }
+        }
+    }
+}
+
+/// Stage 3e: every export format and colour space on a rendered page.
+fn export_all(pm: &tiny_skia::Pixmap) {
+    use folio_render::export::*;
+    let _ = content_margins(pm);
+    let _ = auto_mode(pm);
+    let formats = [
+        Format::Png(PngFilter::Adaptive),
+        Format::Jpeg(Quality::Low, JpegMode::Progressive(3)),
+        Format::Tiff(TiffCompression::Lzw),
+        Format::Tiff(TiffCompression::CcittG4),
+    ];
+    for format in formats {
+        for color in [ColorMode::Auto, ColorMode::Cmyk, ColorMode::Mono] {
+            let _ = encode(
+                pm,
+                &Settings {
+                    format,
+                    color,
+                    dpi: 9.0,
+                },
+            );
         }
     }
 }

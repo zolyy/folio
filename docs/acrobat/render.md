@@ -48,10 +48,16 @@ brings it, **Folio choice** = not documented publicly.
 
 | Acrobat option | Folio `folio render` |
 |---|---|
-| PNG | ✔ |
-| JPEG, TIFF | 3e |
-| Resolution 72–2400 ppi | ✔ `--dpi` (1–9600 accepted; a page is capped at 268 megapixels) |
-| Colour space: automatic / RGB / grayscale | 3e |
-| Page range | ✔ `--pages` |
-| Output file names `<name>_Page_<n>.png` | ✔ (**Folio choice** of names) |
+| Formats PNG, JPEG, TIFF | ✔ `--format png\|jpeg\|tiff` |
+| JPEG 2000 | later |
+| Colour space: Determine automatically / RGB / CMYK / Grayscale / Monochrome | ✔ `--colorspace auto\|rgb\|cmyk\|gray\|mono` (automatic picks grayscale for pages without colour; CMYK through the simple formula, no ICC; PNG has no CMYK and is refused with a message) |
+| Resolution 72–2400 ppi, written into the file | ✔ `--dpi` (pHYs, JFIF density, TIFF X/YResolution) |
+| JPEG quality Maximum / High / Medium / Low / Minimum | ✔ `--quality` (**Folio choice** of the numeric values: 100, 85, 70, 50, 30) |
+| JPEG format Baseline (Standard) / Baseline (Optimized) / Progressive (3, 4, 5 scans) | ✔ `--jpeg-mode`, `--scans` |
+| PNG filter None / Sub / Up / Average / Paeth / Adaptive | ✔ `--png-filter` |
+| PNG interlace Adam7 | later |
+| TIFF compression None / LZW / ZIP, CCITT Group 4 for monochrome | ✔ `--tiff-compression` (TIFF written by Folio) |
+| TIFF JPEG compression, CCITT Group 3 | later |
+| Page range; files `<name>_Page_<n>.<ext>` | ✔ (**Folio choice** of names) |
+| Transparent background | ✔ `--transparent` (PNG) |
 | Needs content copying to be allowed on protected files | ✔ (**Folio choice**) |

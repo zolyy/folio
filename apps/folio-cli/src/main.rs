@@ -147,6 +147,56 @@ enum ChangesArg {
     Any,
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum FormatArg {
+    Png,
+    Jpeg,
+    Tiff,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum ColorspaceArg {
+    Auto,
+    Rgb,
+    Gray,
+    Cmyk,
+    Mono,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum QualityArg {
+    Maximum,
+    High,
+    Medium,
+    Low,
+    Minimum,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum JpegModeArg {
+    Baseline,
+    Optimized,
+    Progressive,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum PngFilterArg {
+    None,
+    Sub,
+    Up,
+    Average,
+    Paeth,
+    Adaptive,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum TiffArg {
+    None,
+    Lzw,
+    Zip,
+    G4,
+}
+
 #[derive(Subcommand)]
 enum Cmd {
     /// Open a PDF, report how healthy it is and what was repaired.
@@ -290,6 +340,9 @@ enum Cmd {
         /// Set to zero: remove the box.
         #[arg(long, group = "how")]
         reset: bool,
+        /// Remove white margins: crop each page to its visible content.
+        #[arg(long, group = "how")]
+        remove_white_margins: bool,
         #[arg(long = "box", value_enum, default_value = "crop")]
         which: BoxArg,
         #[arg(long, value_enum, default_value = "pt")]
@@ -342,7 +395,8 @@ enum Cmd {
         #[command(flatten)]
         out: Out,
     },
-    /// Render pages to PNG (Export → Image). Files are `<name>_Page_<n>.png`.
+    /// Export pages as images (Export PDF → Image): PNG, JPEG or TIFF.
+    /// Files are `<name>_Page_<n>.<ext>`.
     Render {
         file: PathBuf,
         /// Page range (default: all).
@@ -375,9 +429,27 @@ enum Cmd {
         /// Do not draw comments, stamps and form fields.
         #[arg(long)]
         no_annotations: bool,
-        /// Transparent instead of white page background.
+        /// Transparent instead of white page background (PNG only).
         #[arg(long)]
         transparent: bool,
+        #[arg(long, value_enum, default_value = "png")]
+        format: FormatArg,
+        /// Colour space ("Determine automatically" picks grayscale for pages without colour).
+        #[arg(long, value_enum, default_value = "auto")]
+        colorspace: ColorspaceArg,
+        /// JPEG quality.
+        #[arg(long, value_enum, default_value = "high")]
+        quality: QualityArg,
+        /// JPEG format.
+        #[arg(long, value_enum, default_value = "baseline")]
+        jpeg_mode: JpegModeArg,
+        /// Number of scans for progressive JPEG (3, 4 or 5).
+        #[arg(long, default_value_t = 3)]
+        scans: u8,
+        #[arg(long, value_enum, default_value = "adaptive")]
+        png_filter: PngFilterArg,
+        #[arg(long, value_enum, default_value = "lzw")]
+        tiff_compression: TiffArg,
         #[arg(long)]
         force: bool,
     },
@@ -971,6 +1043,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             file,
             margins,
             reset,
+            remove_white_margins,
             which,
             unit,
             pages: spec,
@@ -988,7 +1061,23 @@ fn run(cli: &Cli) -> Res<ExitCode> {
                 BoxArg::Trim => PageBox::Trim,
                 BoxArg::Bleed => PageBox::Bleed,
             };
-            let changed = if *reset {
+            let changed = if *remove_white_margins {
+                let list = e(doc.pages())?;
+                let opts = folio_render::Options {
+                    dpi: 72.0,
+                    annotations: false,
+                    ..folio_render::Options::default()
+                };
+                let mut n = 0;
+                for &i in &idx {
+                    let Some(&page) = list.get(i) else { continue };
+                    let r = e(folio_render::render_page(&doc, page, &opts))?;
+                    if let Some(m) = white_margins(&r) {
+                        n += e(pages::crop(&mut doc, &[i], b, m))?;
+                    }
+                }
+                n
+            } else if *reset {
                 e(pages::reset_box(&mut doc, &idx, b))?
             } else if let Some(m) = margins {
                 let k = match unit {
@@ -1168,8 +1257,57 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             no_system_fonts,
             no_annotations,
             transparent,
+            format,
+            colorspace,
+            quality,
+            jpeg_mode,
+            scans,
+            png_filter,
+            tiff_compression,
             force,
         } => {
+            use folio_render::export;
+            if *transparent && !matches!(format, FormatArg::Png) {
+                return Err("--transparent works with PNG only".into());
+            }
+            let fmt = match format {
+                FormatArg::Png => export::Format::Png(match png_filter {
+                    PngFilterArg::None => export::PngFilter::None,
+                    PngFilterArg::Sub => export::PngFilter::Sub,
+                    PngFilterArg::Up => export::PngFilter::Up,
+                    PngFilterArg::Average => export::PngFilter::Average,
+                    PngFilterArg::Paeth => export::PngFilter::Paeth,
+                    PngFilterArg::Adaptive => export::PngFilter::Adaptive,
+                }),
+                FormatArg::Jpeg => export::Format::Jpeg(
+                    match quality {
+                        QualityArg::Maximum => export::Quality::Maximum,
+                        QualityArg::High => export::Quality::High,
+                        QualityArg::Medium => export::Quality::Medium,
+                        QualityArg::Low => export::Quality::Low,
+                        QualityArg::Minimum => export::Quality::Minimum,
+                    },
+                    match jpeg_mode {
+                        JpegModeArg::Baseline => export::JpegMode::Baseline,
+                        JpegModeArg::Optimized => export::JpegMode::Optimized,
+                        JpegModeArg::Progressive => export::JpegMode::Progressive(*scans),
+                    },
+                ),
+                FormatArg::Tiff => export::Format::Tiff(match tiff_compression {
+                    TiffArg::None => export::TiffCompression::None,
+                    TiffArg::Lzw => export::TiffCompression::Lzw,
+                    TiffArg::Zip => export::TiffCompression::Zip,
+                    TiffArg::G4 => export::TiffCompression::CcittG4,
+                }),
+            };
+            let color = match colorspace {
+                ColorspaceArg::Auto => export::ColorMode::Auto,
+                ColorspaceArg::Rgb => export::ColorMode::Rgb,
+                ColorspaceArg::Gray => export::ColorMode::Gray,
+                ColorspaceArg::Cmyk => export::ColorMode::Cmyk,
+                ColorspaceArg::Mono => export::ColorMode::Mono,
+            };
+            let ext = fmt.extension();
             let doc = load(file)?;
             // Exporting page images extracts content, like copying (Folio choice).
             need(&doc, Need::Copy, file)?;
@@ -1197,7 +1335,7 @@ fn run(cli: &Cli) -> Res<ExitCode> {
                 .map(|&i| {
                     let t = output
                         .clone()
-                        .unwrap_or_else(|| dir.join(format!("{base}_Page_{}.png", i + 1)));
+                        .unwrap_or_else(|| dir.join(format!("{base}_Page_{}.{ext}", i + 1)));
                     (i, t)
                 })
                 .collect();
@@ -1208,7 +1346,18 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             for (i, t) in &targets {
                 let Some(&page) = list.get(*i) else { continue };
                 let r = e(folio_render::render_page(&doc, page, &opts))?;
-                let png = e(r.png())?;
+                let png = if *transparent {
+                    e(r.png())?
+                } else {
+                    e(export::encode(
+                        &r.pixmap,
+                        &export::Settings {
+                            format: fmt,
+                            color,
+                            dpi: *dpi,
+                        },
+                    ))?
+                };
                 std::fs::write(t, png)
                     .map_err(|err| Fail::from(format!("{}: {err}", t.display())))?;
                 report.push((
@@ -1398,4 +1547,16 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
     }
+}
+
+/// Margins (top, bottom, left, right, in points at 72 dpi) around the
+/// non-white content of a rendered page, or `None` for a blank page.
+fn white_margins(r: &folio_render::Rendered) -> Option<Margins> {
+    let [t, b, l, rr] = folio_render::export::content_margins(&r.pixmap)?;
+    Some(Margins {
+        top: f64::from(t),
+        bottom: f64::from(b),
+        left: f64::from(l),
+        right: f64::from(rr),
+    })
 }
