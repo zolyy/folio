@@ -10,7 +10,7 @@ authors.workspace = true
 
 [dependencies]
 aes = "0.8"
-cbc = { version = "0.1", features = ["block-padding"] }
+cbc = { version = "0.2", features = ["block-padding"] }
 cipher = { version = "0.4", features = ["std", "block-padding"] }
 getrandom = "0.2"
 md-5 = "0.10"
