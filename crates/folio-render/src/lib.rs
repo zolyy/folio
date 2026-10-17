@@ -16,6 +16,7 @@ pub mod image;
 mod interp;
 pub mod samples;
 pub mod shading;
+pub mod text;
 
 use folio_core::{Document, Error, ObjRef, Result};
 pub use tiny_skia::Pixmap;
@@ -43,6 +44,8 @@ pub struct Options {
     pub annotations: bool,
     /// Paint the page white first (off = transparent background).
     pub white_background: bool,
+    /// Record every glyph shown, with its box (for search and selection).
+    pub collect_text: bool,
 }
 
 impl Default for Options {
@@ -56,6 +59,7 @@ impl Default for Options {
             system_fonts: true,
             annotations: true,
             white_background: true,
+            collect_text: false,
         }
     }
 }
@@ -67,6 +71,8 @@ pub struct Rendered {
     /// Operations skipped because their kind is not implemented yet
     /// (e.g. `"text"`, `"image"`, `"shading"`), with counts.
     pub skipped: Vec<(&'static str, usize)>,
+    /// Glyphs shown, in content order, when `Options::collect_text` is on.
+    pub text: Vec<text::Glyph>,
 }
 
 impl Rendered {
@@ -117,4 +123,33 @@ pub fn render_page(doc: &Document, page: ObjRef, opts: &Options) -> Result<Rende
             "this page could not be drawn (the renderer hit an internal error)".into(),
         ))
     })
+}
+
+/// The page's text with every character's position, for search and
+/// selection. Renders at a low resolution: only the glyph geometry is kept.
+pub fn page_text(doc: &Document, page: ObjRef) -> Result<text::PageText> {
+    let opts = Options {
+        dpi: 9.0,
+        smooth_line_art: false,
+        smooth_images: false,
+        smooth_text: false,
+        annotations: false,
+        collect_text: true,
+        ..Options::default()
+    };
+    let r = render_page(doc, page, &opts)?;
+    // Text placed outside the visible page (e.g. the other half of a spread
+    // that was cropped away) is not part of the page the reader sees.
+    let (w, h) = page_size_points(doc, page);
+    let (w, h) = (w as f32, h as f32);
+    let visible: Vec<text::Glyph> = r
+        .text
+        .into_iter()
+        .filter(|g| {
+            let cx = g.quad.iter().map(|p| p[0]).sum::<f32>() / 4.0;
+            let cy = g.quad.iter().map(|p| p[1]).sum::<f32>() / 4.0;
+            (-1.0..=w + 1.0).contains(&cx) && (-1.0..=h + 1.0).contains(&cy)
+        })
+        .collect();
+    Ok(text::layout(&visible))
 }

@@ -14,8 +14,10 @@ use eframe::egui::{
 use folio_core::{Document, Error};
 
 use crate::cache::{Done, Key as PageKey, MAX_SIDE, Renderer};
+use crate::find::{FindState, Selection, from_view, to_view};
 use crate::icons::{self, Icon};
 use crate::viewer::{Layout, PAGE_GAP, Tab, Zoom};
+use folio_render::text::{self as ftext, Pt};
 
 /// Files kept in File → Open Recent (Folio choice).
 pub const RECENT_MAX: usize = 10;
@@ -85,6 +87,8 @@ pub struct App {
     scroll_delta: f32,
     title: String,
     wanted: HashSet<PageKey>,
+    /// The Find bar (Ctrl+F).
+    pub find: FindState,
 }
 
 impl App {
@@ -123,6 +127,140 @@ impl App {
             scroll_delta: 0.0,
             title: String::new(),
             wanted: HashSet::new(),
+            find: FindState::default(),
+        }
+    }
+
+    // ---- find and selection (stage 4b) -------------------------------------
+
+    /// Start reading the active document's text in the background.
+    fn ensure_index(&mut self) {
+        let notify_ctx = self.ctx.clone();
+        if let Some(t) = self.tabs.get_mut(self.active) {
+            let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+                if let Some(c) = notify_ctx.get() {
+                    c.request_repaint();
+                }
+            });
+            t.index.start(t.doc.clone(), t.pages.clone(), notify);
+        }
+    }
+
+    pub fn open_find(&mut self) {
+        self.find.open = true;
+        self.find.focus = true;
+        self.ensure_index();
+    }
+
+    /// Go to the next (or previous) match and show its page.
+    pub fn find_step(&mut self, forward: bool) {
+        let Some(t) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        self.find.refresh(t.id, &t.index);
+        let from = t.current;
+        let hit = if forward {
+            self.find.next(from)
+        } else {
+            self.find.previous(from)
+        };
+        if let Some(page) = hit.map(|h| h.page) {
+            t.go_to(page);
+        }
+    }
+
+    /// Select every page's text (Acrobat's Select All).
+    pub fn select_all(&mut self) {
+        self.ensure_index();
+        if let Some(t) = self.tabs.get_mut(self.active)
+            && t.page_count() > 0
+        {
+            t.selection = Some(Selection {
+                anchor: (0, 0),
+                head: (t.page_count() - 1, usize::MAX - 1),
+            });
+        }
+    }
+
+    /// Copy the selection to the clipboard, if the document allows copying.
+    pub fn copy_selection(&mut self, ctx: &egui::Context) {
+        let Some(t) = self.tabs.get(self.active) else {
+            return;
+        };
+        let Some(sel) = t.selection else { return };
+        if t.doc.require(folio_core::crypt::Need::Copy).is_err() {
+            self.message =
+                Some("This document's security does not allow copying its content.".into());
+            return;
+        }
+        let (text, missing) = sel.text(&t.index);
+        if missing > 0 {
+            self.message = Some(format!(
+                "Still reading the text of {missing} page(s); copied what is ready."
+            ));
+        }
+        if !text.is_empty() {
+            ctx.copy_text(text);
+        }
+    }
+
+    /// The Find bar: query, previous/next, Acrobat's two options, the count.
+    fn find_bar(&mut self, ui: &mut egui::Ui) {
+        let mut step: Option<bool> = None;
+        let mut close = false;
+        // Count with what is known now, so the label is never a frame behind.
+        if let Some(t) = self.tabs.get(self.active) {
+            self.find.refresh(t.id, &t.index);
+        }
+        ui.horizontal(|ui| {
+            ui.label("Find");
+            let edit = egui::TextEdit::singleline(&mut self.find.query)
+                .hint_text("Find text")
+                .desired_width(220.0);
+            let r = ui.add(edit);
+            if std::mem::take(&mut self.find.focus) {
+                r.request_focus();
+            }
+            if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                step = Some(!ui.input(|i| i.modifiers.shift));
+                r.request_focus();
+            }
+            if ui.button("Previous").clicked() {
+                step = Some(false);
+            }
+            if ui.button("Next").clicked() {
+                step = Some(true);
+            }
+            ui.checkbox(&mut self.find.whole_words, "Whole words only");
+            ui.checkbox(&mut self.find.case_sensitive, "Case-sensitive");
+            if let Some(t) = self.tabs.get(self.active) {
+                ui.label(self.find.status(&t.index));
+            }
+            if ui.button("Close").clicked() {
+                close = true;
+            }
+        });
+        // Open parameters: wait until the first match from the current page on
+        // is known, so --page N is honoured.
+        if self.find.pending
+            && !self.find.results.is_empty()
+            && let Some(t) = self.tabs.get(self.active)
+            && self.find.settled_from(t.current, &t.index)
+        {
+            self.find.pending = false;
+            step = Some(true);
+        }
+        // The query or options changed while drawing: show the new count next.
+        if let Some(t) = self.tabs.get(self.active)
+            && self.find.refresh(t.id, &t.index)
+        {
+            ui.ctx().request_repaint();
+        }
+        if let Some(forward) = step {
+            self.find_step(forward);
+        }
+        if close {
+            self.find.open = false;
         }
     }
 
@@ -257,6 +395,10 @@ impl App {
         if !self.tabs.is_empty() {
             Panel::top("tabs").show(ui, |ui| self.tab_bar(ui));
         }
+        if self.find.open && !self.tabs.is_empty() {
+            self.ensure_index();
+            Panel::top("find").show(ui, |ui| self.find_bar(ui));
+        }
         Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
         if self.pane != Pane::Hidden && !self.tabs.is_empty() {
             Panel::left("pane")
@@ -385,6 +527,32 @@ impl App {
         let prev = plain(Key::ArrowLeft) || plain(Key::PageUp);
         let first = plain(Key::Home);
         let last = plain(Key::End);
+        let find = take(cmd, Key::F);
+        let shift_f3 = take(Modifiers::SHIFT, Key::F3);
+        let f3 = take(Modifiers::NONE, Key::F3);
+        let close_find = self.find.open && !typing && take(Modifiers::NONE, Key::Escape);
+        let select_all = !typing && take(cmd, Key::A);
+        // egui turns Ctrl+C into a Copy event rather than a key press.
+        let copy = !typing
+            && (take(cmd, Key::C)
+                || ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy))));
+        if find {
+            self.open_find();
+        }
+        if f3 || shift_f3 {
+            self.find.open = true;
+            self.ensure_index();
+            self.find_step(f3);
+        }
+        if close_find {
+            self.find.open = false;
+        }
+        if select_all {
+            self.select_all();
+        }
+        if copy {
+            self.copy_selection(ctx);
+        }
         let down = plain(Key::ArrowDown);
         let up = plain(Key::ArrowUp);
         let Some(t) = self.tabs.get_mut(self.active) else {
@@ -480,6 +648,31 @@ impl App {
             });
             let has = !self.tabs.is_empty();
             ui.add_enabled_ui(has, |ui| {
+                ui.menu_button("Edit", |ui| {
+                    let has_sel = self.tab().is_some_and(|t| t.selection.is_some());
+                    if ui
+                        .add_enabled(has_sel, egui::Button::new("Copy").shortcut_text("Ctrl+C"))
+                        .clicked()
+                    {
+                        self.copy_selection(ui.ctx());
+                        ui.close();
+                    }
+                    if ui
+                        .add(egui::Button::new("Select All").shortcut_text("Ctrl+A"))
+                        .clicked()
+                    {
+                        self.select_all();
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui
+                        .add(egui::Button::new("Find").shortcut_text("Ctrl+F"))
+                        .clicked()
+                    {
+                        self.open_find();
+                        ui.close();
+                    }
+                });
                 ui.menu_button("View", |ui| {
                     let Some(t) = self.tabs.get_mut(self.active) else {
                         return;
@@ -874,6 +1067,7 @@ impl App {
             renderer,
             wanted,
             recent,
+            find,
             ..
         } = self;
         let Some(t) = tabs.get_mut(*active) else {
@@ -918,6 +1112,7 @@ impl App {
         let content_w = (widest + 2.0 * PAGE_GAP).max(size.x);
         let mut area = ScrollArea::both()
             .id_salt(("pages", t.id, t.layout == Layout::SinglePage))
+            // Mouse drags select text (egui only drag-scrolls on touch screens).
             .auto_shrink([false, false]);
         let jump = t.scroll_to.take();
         if let Some(p) = jump {
@@ -937,6 +1132,8 @@ impl App {
                 .page_at(&tops, visible.top())
                 .min(pages.len().saturating_sub(1));
             let mut shown = Vec::new();
+            let mut layers: Vec<(usize, Rect)> = Vec::new();
+            let mut dragging = false;
             for (slot, &i) in pages.iter().enumerate().skip(first) {
                 let top = tops.get(slot).copied().unwrap_or(0.0);
                 if top > visible.bottom() {
@@ -952,6 +1149,26 @@ impl App {
                 );
                 let key = page_key(t, i, w * ppp, renderer.max_side());
                 paint_page(ui, renderer, wanted, t, i, key, rect);
+                if text_layer(ui, t, find, i, rect, scale) {
+                    dragging = true;
+                }
+                layers.push((i, rect));
+            }
+            // A selection may run on into the next pages.
+            if dragging
+                && let Some(pos) = ui.input(|inp| inp.pointer.interact_pos())
+                && let Some(&(page, rect)) = layers.iter().min_by(|a, b| {
+                    let d = |r: &Rect| (pos.y - r.center().y).abs() - r.height() / 2.0;
+                    d(&a.1).total_cmp(&d(&b.1))
+                })
+                && let Some(text) = t.index.get(page)
+                && let Some(sel) = t.selection.as_mut()
+            {
+                let size = t.sizes.get(page).copied().unwrap_or([612.0, 792.0]);
+                let v = [(pos.x - rect.min.x) / scale, (pos.y - rect.min.y) / scale];
+                if let Some(c) = ftext::char_at(&text, from_view(v, size, t.rotation)) {
+                    sel.head = (page, c);
+                }
             }
             // Draw the next pages ahead of the scroll, once the visible ones are queued.
             if t.layout == Layout::Continuous
@@ -1147,4 +1364,77 @@ fn save_recent(f: &Path, list: &[PathBuf]) {
     let text: String = list.iter().map(|p| format!("{}\n", p.display())).collect();
     // Losing the recent list is not worth interrupting the reader for.
     let _ = std::fs::write(f, text);
+}
+
+/// Find highlights and the selection over one page, and text selection with
+/// the mouse. Returns true while a drag that started here goes on.
+fn text_layer(
+    ui: &egui::Ui,
+    t: &mut Tab,
+    find: &FindState,
+    page: usize,
+    rect: Rect,
+    scale: f32,
+) -> bool {
+    let text = t.index.get(page);
+    let size = t.sizes.get(page).copied().unwrap_or([612.0, 792.0]);
+    let rot = t.rotation;
+    let to_screen = |p: Pt| {
+        let v = to_view(p, size, rot);
+        rect.min + Vec2::new(v[0] * scale, v[1] * scale)
+    };
+    let to_page = |pos: Pos2| -> Pt {
+        let v = [(pos.x - rect.min.x) / scale, (pos.y - rect.min.y) / scale];
+        from_view(v, size, rot)
+    };
+    let painter = ui.painter_at(rect);
+    let fill = |q: &[Pt; 4], color: Color32| {
+        let pts: Vec<Pos2> = q.iter().map(|&p| to_screen(p)).collect();
+        painter.add(egui::Shape::convex_polygon(pts, color, Stroke::NONE));
+    };
+    if let Some(text) = &text {
+        for (k, hit) in find.results.iter().enumerate() {
+            if hit.page != page || !find.open {
+                continue;
+            }
+            let color = if find.current == Some(k) {
+                Color32::from_rgba_unmultiplied(255, 140, 0, 120)
+            } else {
+                Color32::from_rgba_unmultiplied(255, 220, 0, 90)
+            };
+            for q in ftext::quads(text, hit.range.clone()) {
+                fill(&q, color);
+            }
+        }
+        if let Some(sel) = t.selection {
+            let len = text.text.chars().count();
+            if let Some(r) = sel.range_on(page, len) {
+                for q in ftext::quads(text, r) {
+                    fill(&q, Color32::from_rgba_unmultiplied(60, 120, 255, 80));
+                }
+            }
+        }
+    }
+    let resp = ui.interact(
+        rect,
+        egui::Id::unique(("page-text", t.id, page)),
+        Sense::click_and_drag(),
+    );
+    let over_text = text.as_ref().is_some_and(|tx| !tx.text.is_empty());
+    if resp.hovered() && over_text {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+    }
+    if resp.drag_started()
+        && let (Some(pos), Some(tx)) = (resp.interact_pointer_pos(), &text)
+        && let Some(c) = ftext::char_at(tx, to_page(pos))
+    {
+        t.selection = Some(Selection {
+            anchor: (page, c),
+            head: (page, c),
+        });
+    }
+    if resp.clicked() {
+        t.selection = None;
+    }
+    resp.dragged()
 }
