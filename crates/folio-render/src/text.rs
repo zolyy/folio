@@ -193,7 +193,7 @@ pub fn quads(text: &PageText, range: std::ops::Range<usize>) -> Vec<[Pt; 4]> {
             }
             None => {
                 // A line break ends the run; an inferred space joins it.
-                if text.text.chars().nth(i) == Some('\n')
+                if chars.get(i) == Some(&'\n')
                     && let Some(r) = run.take()
                 {
                     out.push(r);
