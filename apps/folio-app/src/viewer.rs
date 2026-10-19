@@ -78,11 +78,15 @@ pub struct Tab {
     pub scroll_to: Option<usize>,
     /// Identifies this document in the render cache.
     pub id: u64,
+    /// Every page's text with positions, for Find and selection.
+    pub index: crate::find::TextIndex,
+    pub selection: Option<crate::find::Selection>,
 }
 
 impl Tab {
     pub fn new(doc: Document, path: Option<PathBuf>, title: String, id: u64) -> Self {
         let pages = doc.pages().unwrap_or_default();
+        let page_count = pages.len();
         let sizes = pages
             .iter()
             .map(|&p| page_size(&doc, p))
@@ -105,6 +109,8 @@ impl Tab {
             layout: Layout::Continuous,
             scroll_to: Some(0),
             id,
+            index: crate::find::TextIndex::new(page_count),
+            selection: None,
         }
     }
 

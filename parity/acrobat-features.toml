@@ -53,12 +53,16 @@ notes = "Stage 4a: Bookmarks panel with the whole tree, initial open state from 
 [[feature]]
 id = "view.search"
 name = "Căutare text, cu evidențiere; căutare avansată în mai multe fișiere"
-status = "planned"
+status = "partial"
+evidence = ["find_with_acrobat_options", "highlight_quads_split_by_line", "ctrl_f_opens_find_and_steps_through_matches_across_pages", "find_options_whole_words_and_case", "cli_find_reports_pages_context_and_rectangles"]
+notes = "Find with whole words and case options, phrases across lines, highlights, background reading, open parameter --search, folio find on the command line; counts match Poppler on a real 24-page brochure. Missing: reading order of multi-column layouts (stage 13), Advanced Search across files (tools.index)."
 
 [[feature]]
 id = "view.select-copy"
 name = "Selectare și copiere text / imagine"
-status = "planned"
+status = "partial"
+evidence = ["selection_picks_the_nearest_character", "selection_ranges_across_pages", "select_all_and_copy_respect_document_security", "edit_menu_offers_copy_select_all_and_find"]
+notes = "Drag to select text across pages, Copy, Select All, Edit menu; copy honours the document's security. Missing: selecting images, column selection."
 
 [[feature]]
 id = "view.layers"

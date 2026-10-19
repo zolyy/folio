@@ -44,6 +44,35 @@ fn exercise_render(bytes: &[u8]) {
             }
         }
     }
+    // Stage 4b: page text, Find, highlight quads and selection.
+    for &p in pages.iter().take(4) {
+        let Ok(t) = folio_render::page_text(&doc, p) else {
+            continue;
+        };
+        use folio_render::text::{FindOptions, char_at, find, quads, slice};
+        for q in ["a", "the e", "ș", " ", "�", "Hello Folio"] {
+            for (whole_words, case_sensitive) in [(false, false), (true, true)] {
+                let opts = FindOptions {
+                    whole_words,
+                    case_sensitive,
+                };
+                for r in find(&t, q, opts).into_iter().take(50) {
+                    let _ = quads(&t, r.clone());
+                    let _ = slice(&t, r);
+                }
+            }
+        }
+        for pt in [
+            [0.0, 0.0],
+            [f32::NAN, 1.0],
+            [f32::INFINITY, -1e30],
+            [1e9, 1e9],
+        ] {
+            let _ = char_at(&t, pt);
+        }
+        let _ = quads(&t, 0..usize::MAX);
+        let _ = slice(&t, usize::MAX - 1..usize::MAX);
+    }
 }
 
 /// Stage 3e: every export format and colour space on a rendered page.

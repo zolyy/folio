@@ -1,4 +1,4 @@
-//! `folio-app [FILE.pdf ...]`: the reading window.
+//! `folio-app [FILE.pdf ...] [--page N] [--search TEXT]`: the reading window.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -26,9 +26,7 @@ fn main() -> eframe::Result {
             .pick_files()
             .unwrap_or_default()
     }));
-    for arg in std::env::args_os().skip(1) {
-        app.open_path(std::path::Path::new(&arg));
-    }
+    folio_app::apply_args(&mut app, std::env::args_os().skip(1));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Folio")

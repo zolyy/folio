@@ -59,6 +59,10 @@ pub struct PdfFont {
     /// The font has nothing Folio can draw with.
     pub unavailable: bool,
     cache: RefCell<HashMap<u32, Option<Arc<Path>>>>,
+    /// Code → Unicode from the /ToUnicode CMap (search, selection, copy).
+    to_unicode: HashMap<u32, String>,
+    /// Simple fonts: code → character from the encoding's glyph names.
+    text_names: Vec<Option<char>>,
 }
 
 enum CidToGid {
@@ -119,10 +123,31 @@ fn to_transform(m: [f64; 6]) -> Transform {
 impl PdfFont {
     pub fn load(doc: &Document, fd: &Dict, system_fonts: bool) -> PdfFont {
         let subtype = fd.get_name(b"Subtype").unwrap_or(b"Type1").to_vec();
-        match subtype.as_slice() {
+        let mut f = match subtype.as_slice() {
             b"Type0" => Self::load_type0(doc, fd, system_fonts),
             b"Type3" => Self::load_type3(doc, fd),
             _ => Self::load_simple(doc, fd, system_fonts, &subtype),
+        };
+        if let Some(Object::Stream(s)) = doc.resolve_key(fd, b"ToUnicode")
+            && let Ok(data) = decode_stream(s)
+        {
+            f.to_unicode = folio_core::tounicode::parse(&data);
+        }
+        if f.composite.is_none() {
+            f.text_names = text_names(doc, fd);
+        }
+        f
+    }
+
+    /// The text a code stands for: /ToUnicode first, then the encoding's
+    /// glyph names. Empty when the font gives no way to know.
+    pub fn unicode(&self, code: u32) -> String {
+        if let Some(s) = self.to_unicode.get(&code) {
+            return s.clone();
+        }
+        match self.text_names.get(code as usize) {
+            Some(Some(c)) => c.to_string(),
+            _ => String::new(),
         }
     }
 
@@ -138,6 +163,8 @@ impl PdfFont {
             type3: None,
             unavailable: true,
             cache: RefCell::new(HashMap::new()),
+            to_unicode: HashMap::new(),
+            text_names: Vec::new(),
         }
     }
 
@@ -685,4 +712,41 @@ fn cid_widths(doc: &Document, w: &[Object], out: &mut HashMap<u32, f64>) {
             None => break,
         }
     }
+}
+
+/// Characters of a simple font's codes, from its base encoding and
+/// /Differences (§9.6.5); symbolic fonts without an encoding get none.
+fn text_names(doc: &Document, fd: &Dict) -> Vec<Option<char>> {
+    let enc = doc.resolve_key(fd, b"Encoding");
+    let base = match enc {
+        Some(Object::Name(n)) => BaseEncoding::from_name(n),
+        Some(Object::Dict(d)) => d
+            .get_name(b"BaseEncoding")
+            .and_then(BaseEncoding::from_name)
+            .or(Some(BaseEncoding::Standard)),
+        _ => Some(BaseEncoding::Standard),
+    };
+    let mut out: Vec<Option<char>> = (0..=255u8)
+        .map(|c| base.and_then(|b| b.glyph_name(c)).and_then(name_char))
+        .collect();
+    if let Some(Object::Dict(d)) = enc
+        && let Some(Object::Array(diffs)) = doc.resolve_key(d, b"Differences")
+    {
+        let mut code: i64 = 0;
+        for x in diffs.iter().take(4096) {
+            match doc.resolve(x) {
+                Object::Int(n) => code = *n,
+                Object::Name(n) => {
+                    if let Ok(c) = usize::try_from(code)
+                        && let Some(slot) = out.get_mut(c)
+                    {
+                        *slot = std::str::from_utf8(n).ok().and_then(name_char);
+                    }
+                    code += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    out
 }

@@ -47,9 +47,19 @@ drawn by Folio (`apps/folio-app/src/icons.rs`), no font or image asset and no Ad
 
 | Acrobat | Folio |
 |---|---|
-| Find (Ctrl+F): next / previous, match count, whole words, case-sensitive | 4b |
-| Highlight every match on the page | 4b |
-| Select text with the cursor, copy (Ctrl+C), select all (Ctrl+A) | 4b |
+| Find (Ctrl+F): next / previous (Enter, Shift+Enter, F3, Shift+F3), "n of N" count | 4b ✓ |
+| Whole words only, Case-sensitive | 4b ✓ |
+| Phrases found across line breaks | 4b ✓ |
+| Highlight every match on the page, the current one distinctly | 4b ✓ |
+| Text read in the background; the count says how many pages are read so far | 4b ✓ (**Folio choice**) |
+| Invisible text (OCR layers) is found too; text outside the visible page is not | 4b ✓ |
+| Select text by dragging (I-beam cursor), across pages | 4b ✓ |
+| Copy (Ctrl+C), Select All (Ctrl+A), Edit menu | 4b ✓ |
+| Copy refused when the document's security forbids content copying; Find still works | 4b ✓ |
+| Open parameters `page=` and `search=` | 4b ✓ as `folio-app FILE --page N --search TEXT` |
+| Matches in reading order of multi-column layouts | later (stage 13, layout analysis); Folio follows the order text is drawn |
+| Select images, column (Alt+drag) selection | later |
+| `folio find` on the command line, with page, context and rectangles in `--json` | 4b ✓ |
 | Advanced Search across files | later (tools.index) |
 
 ## view.layers, view.attachments, view.properties, view.night-mode
