@@ -14,6 +14,7 @@ pub mod font;
 pub mod function;
 pub mod image;
 mod interp;
+pub mod oc;
 pub mod samples;
 pub mod shading;
 pub mod text;
@@ -25,7 +26,7 @@ pub use tiny_skia::Pixmap;
 pub const MAX_PIXELS: u64 = 268_435_456;
 
 /// Acrobat's Page Display rendering choices.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Options {
     /// Resolution in pixels per inch (Acrobat: 72–2400 when exporting).
     pub dpi: f64,
@@ -44,6 +45,11 @@ pub struct Options {
     pub annotations: bool,
     /// Paint the page white first (off = transparent background).
     pub white_background: bool,
+    /// Optional-content groups (layers) to hide, by object number; `None`
+    /// shows the document's default layer state (Acrobat's Layers panel).
+    pub hidden_layers: Option<std::sync::Arc<[u32]>>,
+    /// Accessibility → Replace Document Colors.
+    pub replace_colors: Option<ReplaceColors>,
     /// Record every glyph shown, with its box (for search and selection).
     pub collect_text: bool,
 }
@@ -59,6 +65,8 @@ impl Default for Options {
             system_fonts: true,
             annotations: true,
             white_background: true,
+            hidden_layers: None,
+            replace_colors: None,
             collect_text: false,
         }
     }
@@ -152,4 +160,48 @@ pub fn page_text(doc: &Document, page: ObjRef) -> Result<text::PageText> {
         })
         .collect();
     Ok(text::layout(&visible))
+}
+
+/// Acrobat's Accessibility preference "Replace Document Colors": the page
+/// background and the text (and optionally line art) are drawn in chosen
+/// colours; images are left alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ReplaceColors {
+    pub background: [u8; 3],
+    pub text: [u8; 3],
+    /// "Change the color of line art as well as text".
+    pub line_art: bool,
+    /// "Only change the color of black text or line art".
+    pub only_black: bool,
+}
+
+impl ReplaceColors {
+    /// Acrobat's high-contrast colour combinations.
+    pub const HIGH_CONTRAST: [(&'static str, ReplaceColors); 4] = [
+        (
+            "Green text on black",
+            ReplaceColors::pair([0, 0, 0], [0, 255, 0]),
+        ),
+        (
+            "Yellow text on black",
+            ReplaceColors::pair([0, 0, 0], [255, 255, 0]),
+        ),
+        (
+            "White text on black",
+            ReplaceColors::pair([0, 0, 0], [255, 255, 255]),
+        ),
+        (
+            "Black text on white",
+            ReplaceColors::pair([255, 255, 255], [0, 0, 0]),
+        ),
+    ];
+
+    pub const fn pair(background: [u8; 3], text: [u8; 3]) -> Self {
+        ReplaceColors {
+            background,
+            text,
+            line_art: false,
+            only_black: false,
+        }
+    }
 }

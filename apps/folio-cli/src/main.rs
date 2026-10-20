@@ -444,6 +444,12 @@ enum Cmd {
         /// Do not draw comments, stamps and form fields.
         #[arg(long)]
         no_annotations: bool,
+        /// Hide these layers (names, comma-separated), on top of the default state.
+        #[arg(long, default_value = "")]
+        hide_layers: String,
+        /// Show these layers (names, comma-separated), on top of the default state.
+        #[arg(long, default_value = "")]
+        show_layers: String,
         /// Transparent instead of white page background (PNG only).
         #[arg(long)]
         transparent: bool,
@@ -468,6 +474,22 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
+    /// List the document's layers (optional content), as Acrobat's Layers panel.
+    Layers { file: PathBuf },
+    /// List and save file attachments (Acrobat's Attachments panel).
+    Attachments {
+        file: PathBuf,
+        /// Save the attachment with this number (from the list) or name.
+        #[arg(long)]
+        save: Option<String>,
+        /// Where to save it (default: its own file name, next to the PDF).
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        force: bool,
+    },
+    /// List the fonts used, as the Fonts tab of Document Properties.
+    Fonts { file: PathBuf },
     /// Show the security settings and the Document Restrictions Summary.
     Security { file: PathBuf },
     /// Encrypt with Password (Acrobat's Password Security - Settings).
@@ -1348,6 +1370,8 @@ fn run(cli: &Cli) -> Res<ExitCode> {
             no_smooth_text,
             no_system_fonts,
             no_annotations,
+            hide_layers,
+            show_layers,
             transparent,
             format,
             colorspace,
@@ -1420,6 +1444,8 @@ fn run(cli: &Cli) -> Res<ExitCode> {
                 annotations: !no_annotations,
                 white_background: !transparent,
                 collect_text: false,
+                hidden_layers: layer_state(&doc, hide_layers, show_layers)?,
+                replace_colors: None,
             };
             let dir = dir_of(file, out_dir);
             let base = stem(file);
@@ -1490,6 +1516,172 @@ fn run(cli: &Cli) -> Res<ExitCode> {
                         format!("  (not drawn yet: {})", parts.join(", "))
                     };
                     println!("page {n}: {} ({w} x {h}){note}", t.display());
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Layers { file } => {
+            let doc = load(file)?;
+            let list = folio_render::oc::layers(&doc);
+            if cli.json {
+                let rows: Vec<String> = list
+                    .iter()
+                    .map(|l| {
+                        json::obj(&[
+                            ("name", json::s(&l.name)),
+                            ("title_only", l.ocg.is_none().to_string()),
+                            ("depth", l.depth.to_string()),
+                            ("visible_by_default", l.on_by_default.to_string()),
+                            ("locked", l.locked.to_string()),
+                        ])
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    json::obj(&[("ok", "true".into()), ("layers", json::arr(&rows))])
+                );
+            } else if list.is_empty() {
+                println!("{} has no layers.", file.display());
+            } else {
+                for l in &list {
+                    let indent = "  ".repeat(l.depth);
+                    match l.ocg {
+                        None => println!("{indent}{}", l.name),
+                        Some(_) => println!(
+                            "{indent}[{}] {}{}",
+                            if l.on_by_default { "x" } else { " " },
+                            l.name,
+                            if l.locked { " (locked)" } else { "" }
+                        ),
+                    }
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Attachments {
+            file,
+            save,
+            output,
+            force,
+        } => {
+            let doc = load(file)?;
+            let list = folio_ops::attachments::list(&doc);
+            let Some(which) = save else {
+                if cli.json {
+                    let rows: Vec<String> = list
+                        .iter()
+                        .enumerate()
+                        .map(|(i, a)| {
+                            json::obj(&[
+                                ("number", (i + 1).to_string()),
+                                ("name", json::s(&a.name)),
+                                ("description", json::opt(a.description.as_deref())),
+                                ("size", a.size.map_or("null".into(), |s| s.to_string())),
+                                ("modified", json::opt(a.modified.as_deref())),
+                                (
+                                    "page",
+                                    a.page.map_or("null".into(), |p| (p + 1).to_string()),
+                                ),
+                            ])
+                        })
+                        .collect();
+                    println!(
+                        "{}",
+                        json::obj(&[("ok", "true".into()), ("attachments", json::arr(&rows))])
+                    );
+                } else if list.is_empty() {
+                    println!("{} has no attachments.", file.display());
+                } else {
+                    for (i, a) in list.iter().enumerate() {
+                        let size = a.size.map(info::human_size).unwrap_or_else(|| "?".into());
+                        let page = a
+                            .page
+                            .map(|p| format!(", on page {}", p + 1))
+                            .unwrap_or_default();
+                        println!("{:>3}. {} ({size}{page})", i + 1, a.name);
+                        if let Some(d) = &a.description {
+                            println!("     {d}");
+                        }
+                    }
+                }
+                return Ok(ExitCode::SUCCESS);
+            };
+            // Saving an attachment hands its content out, like copying.
+            need(&doc, Need::Copy, file)?;
+            let idx = match which.trim().parse::<usize>() {
+                Ok(n) if n >= 1 && n <= list.len() => n - 1,
+                _ => list
+                    .iter()
+                    .position(|a| a.name == *which)
+                    .ok_or_else(|| {
+                        Fail::from(format!(
+                            "no attachment numbered or named '{which}'; run 'folio attachments {}' to list them",
+                            file.display()
+                        ))
+                    })?,
+            };
+            let Some(att) = list.get(idx) else {
+                return Err("no such attachment".into());
+            };
+            let bytes = e(folio_ops::attachments::contents(&doc, att))?;
+            let target = output.clone().unwrap_or_else(|| {
+                dir_of(file, &None).join(folio_ops::split::safe_file_name(&att.name))
+            });
+            check_free(&target, *force)?;
+            std::fs::write(&target, &bytes)
+                .map_err(|err| Fail::from(format!("{}: {err}", target.display())))?;
+            if cli.json {
+                println!(
+                    "{}",
+                    json::obj(&[
+                        ("ok", "true".into()),
+                        ("output", json::s(&target.display().to_string())),
+                        ("bytes", bytes.len().to_string()),
+                    ])
+                );
+            } else {
+                println!("saved {} ({} bytes)", target.display(), bytes.len());
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Fonts { file } => {
+            let doc = load(file)?;
+            let list = folio_ops::fonts::list(&doc);
+            if cli.json {
+                let rows: Vec<String> = list
+                    .iter()
+                    .map(|f| {
+                        json::obj(&[
+                            ("name", json::s(&f.name)),
+                            ("type", json::s(&f.kind)),
+                            ("encoding", json::opt(f.encoding.as_deref())),
+                            ("embedded", f.embedded.to_string()),
+                            ("subset", f.subset.to_string()),
+                        ])
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    json::obj(&[("ok", "true".into()), ("fonts", json::arr(&rows))])
+                );
+            } else if list.is_empty() {
+                println!("{} uses no fonts.", file.display());
+            } else {
+                for f in &list {
+                    let how = match (f.embedded, f.subset) {
+                        (true, true) => "Embedded Subset",
+                        (true, false) => "Embedded",
+                        _ => "Not embedded",
+                    };
+                    println!("{}", f.name);
+                    println!("    Type: {}", f.kind);
+                    if let Some(enc) = &f.encoding {
+                        println!("    Encoding: {enc}");
+                    }
+                    println!("    {how}");
                 }
             }
             Ok(ExitCode::SUCCESS)
@@ -1652,4 +1844,55 @@ fn white_margins(r: &folio_render::Rendered) -> Option<Margins> {
         left: f64::from(l),
         right: f64::from(rr),
     })
+}
+
+/// The layers to hide: the document's default, then `--hide-layers` and
+/// `--show-layers` by name. Unknown names are an error that lists the real ones.
+fn layer_state(doc: &Document, hide: &str, show: &str) -> Res<Option<std::sync::Arc<[u32]>>> {
+    let names = |s: &str| -> Vec<String> {
+        s.split(',')
+            .map(|n| n.trim().to_string())
+            .filter(|n| !n.is_empty())
+            .collect()
+    };
+    let (hide, show) = (names(hide), names(show));
+    if hide.is_empty() && show.is_empty() {
+        return Ok(None);
+    }
+    let layers = folio_render::oc::layers(doc);
+    let mut hidden = folio_render::oc::default_hidden(doc);
+    for (list, off) in [(&hide, true), (&show, false)] {
+        for n in list {
+            let found: Vec<u32> = layers
+                .iter()
+                .filter(|l| l.name == *n)
+                .filter_map(|l| l.ocg.map(|r| r.num))
+                .collect();
+            if found.is_empty() {
+                let known: Vec<&str> = layers
+                    .iter()
+                    .filter(|l| l.ocg.is_some())
+                    .map(|l| l.name.as_str())
+                    .collect();
+                return Err(format!(
+                    "no layer named '{n}'; layers: {}",
+                    if known.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        known.join(", ")
+                    }
+                )
+                .into());
+            }
+            for num in found {
+                if off {
+                    hidden.insert(num);
+                } else {
+                    hidden.remove(&num);
+                }
+            }
+        }
+    }
+    let v: Vec<u32> = hidden.into_iter().collect();
+    Ok(Some(v.into()))
 }
