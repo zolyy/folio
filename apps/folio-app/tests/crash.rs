@@ -80,7 +80,7 @@ fn random_text(rng: &mut Rng) -> String {
 fn hammer(t: &mut Tab, rng: &mut Rng) {
     for _ in 0..60 {
         let vp = VIEWPORTS[rng.below(VIEWPORTS.len())];
-        match rng.below(16) {
+        match rng.below(20) {
             0 => t.zoom_in(vp),
             1 => t.zoom_out(vp),
             2 => {
@@ -96,7 +96,32 @@ fn hammer(t: &mut Tab, rng: &mut Rng) {
             8 => t.next_page(),
             9 => t.previous_page(),
             10 => t.last_page(),
-            11 => t.set_layout([Layout::SinglePage, Layout::Continuous][rng.below(2)]),
+            11 => t.set_layout(
+                [
+                    Layout::SinglePage,
+                    Layout::Continuous,
+                    Layout::TwoPage,
+                    Layout::TwoPageScrolling,
+                ][rng.below(4)],
+            ),
+            // Stage 4c: cover page, spreads, placements, layers.
+            16 => t.set_cover_page(rng.below(2) == 0),
+            17 => {
+                let s = t.scale(vp);
+                let (placed, total, width) = t.placements(s);
+                assert!(total.is_finite() && width.is_finite());
+                assert!(placed.iter().all(|p| p.page < t.page_count()));
+            }
+            18 => {
+                if let Some(l) = t
+                    .layers
+                    .get(rng.below(t.layers.len() + 1))
+                    .and_then(|l| l.ocg)
+                {
+                    t.set_layer_visible(l.num, rng.below(2) == 0);
+                }
+            }
+            19 => t.reset_layers(),
             12 => {
                 let s = t.scale(vp);
                 assert!(
@@ -140,14 +165,27 @@ fn stage4a_view_commands_on_mutated_documents() {
             // The background renderer at small sizes, in every view rotation.
             let mut wanted = HashSet::new();
             for page in 0..tab.page_count().min(3) {
+                // Stage 4c: hidden layers and replaced colours as well.
+                let view = folio_app::cache::ViewOptions {
+                    hidden_layers: (rng.below(2) == 0).then(|| {
+                        let all = folio_render::oc::all_groups(&tab.doc);
+                        all.iter().map(|r| r.num).take(rng.below(4)).collect()
+                    }),
+                    replace_colors: (rng.below(2) == 0).then(|| folio_render::ReplaceColors {
+                        line_art: rng.below(2) == 0,
+                        only_black: rng.below(2) == 0,
+                        ..folio_render::ReplaceColors::HIGH_CONTRAST[rng.below(4)].1
+                    }),
+                };
                 let key = PageKey {
                     doc: i as u64,
                     page,
                     width: 24 + rng.below(40) as u32,
                     rotation: [0, 90, 180, 270][rng.below(4)],
+                    view: view.key(),
                 };
                 wanted.insert(key);
-                renderer.request(key, &tab.doc, tab.pages[page]);
+                renderer.request_with(key, &tab.doc, tab.pages[page], &view);
             }
             renderer.retain(&wanted);
             assert!(renderer.wait_idle(SLOW), "renderer did not finish");
@@ -175,7 +213,7 @@ fn stage4a_view_commands_on_mutated_documents() {
         0,
         "forgotten documents left images behind"
     );
-    eprintln!("stage 4a anti-crash (view model + renderer): {n} mutants, slowest {worst:?}");
+    eprintln!("stage 4 anti-crash (view model + renderer): {n} mutants, slowest {worst:?}");
 }
 
 const BUTTONS: [&str; 12] = [
@@ -222,7 +260,18 @@ fn stage4a_window_on_mutated_documents() {
             });
             app.open_bytes(input.clone(), None, format!("mutant-{i}.pdf"));
             app.open_bytes(input.clone(), None, format!("again-{i}.pdf"));
-            app.pane = [Pane::Thumbnails, Pane::Bookmarks, Pane::Hidden][rng.below(3)];
+            app.pane = [
+                Pane::Thumbnails,
+                Pane::Bookmarks,
+                Pane::Layers,
+                Pane::Attachments,
+                Pane::Hidden,
+            ][rng.below(5)];
+            app.properties_open = rng.below(3) == 0;
+            app.colors_open = rng.below(4) == 0;
+            app.colors.enabled = rng.below(2) == 0;
+            app.read_mode = rng.below(4) == 0;
+            app.apply_colors();
             let size = [Vec2::new(900.0, 640.0), Vec2::new(200.0, 120.0)][rng.below(2)];
             let mut h = Harness::builder()
                 .with_size(size)
@@ -239,7 +288,16 @@ fn stage4a_window_on_mutated_documents() {
                     1 => h.key_press(KEYS[rng.below(KEYS.len())]),
                     2 => h.key_press_modifiers(
                         Modifiers::COMMAND,
-                        [Key::Num0, Key::Num1, Key::Num2, Key::Tab, Key::W][rng.below(5)],
+                        [
+                            Key::Num0,
+                            Key::Num1,
+                            Key::Num2,
+                            Key::Tab,
+                            Key::W,
+                            Key::L,
+                            Key::H,
+                            Key::D,
+                        ][rng.below(8)],
                     ),
                     _ => {
                         if let Some(t) = h.state_mut().tab_mut() {
@@ -271,7 +329,7 @@ fn stage4a_window_on_mutated_documents() {
             );
         }
     }
-    eprintln!("stage 4a anti-crash (whole window): {n} mutants, slowest {worst:?}");
+    eprintln!("stage 4 anti-crash (whole window): {n} mutants, slowest {worst:?}");
 }
 
 /// Stage 4b: read the text, search with random queries, step through the

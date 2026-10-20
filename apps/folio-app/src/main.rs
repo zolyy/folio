@@ -26,6 +26,9 @@ fn main() -> eframe::Result {
             .pick_files()
             .unwrap_or_default()
     }));
+    app.saver = Some(Box::new(|name: &str| {
+        rfd::FileDialog::new().set_file_name(name).save_file()
+    }));
     folio_app::apply_args(&mut app, std::env::args_os().skip(1));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

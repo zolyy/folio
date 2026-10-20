@@ -1063,10 +1063,8 @@ impl Ctx<'_> {
             [p[0].x / s, p[0].y / s]
         };
         let quad = [map(0.0, -0.2), map(w, -0.2), map(w, 0.8), map(0.0, 0.8)];
-        if quad.iter().flatten().all(|v| v.is_finite()) {
-            if self.suppress == 0 {
-                self.text.push(crate::text::Glyph { text, quad });
-            }
+        if quad.iter().flatten().all(|v| v.is_finite()) && self.suppress == 0 {
+            self.text.push(crate::text::Glyph { text, quad });
         }
     }
 

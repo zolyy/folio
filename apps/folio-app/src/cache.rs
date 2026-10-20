@@ -27,6 +27,31 @@ pub struct Key {
     pub width: u32,
     /// View rotation, 0/90/180/270.
     pub rotation: u16,
+    /// Fingerprint of the view options (hidden layers, replaced colours):
+    /// a page drawn with other options is a different image.
+    pub view: u64,
+}
+
+/// How pages are drawn beyond size and rotation: Acrobat's Layers panel and
+/// Accessibility → Replace Document Colors.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ViewOptions {
+    /// Layers to hide, sorted; `None` = the document's default state.
+    pub hidden_layers: Option<Arc<[u32]>>,
+    pub replace_colors: Option<folio_render::ReplaceColors>,
+}
+
+impl ViewOptions {
+    /// The fingerprint stored in [`Key::view`] (0 for the defaults).
+    pub fn key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        if *self == ViewOptions::default() {
+            return 0;
+        }
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.hash(&mut h);
+        h.finish() | 1
+    }
 }
 
 /// A finished page: premultiplied RGBA, or why it could not be drawn.
@@ -55,6 +80,7 @@ struct Job {
     page: ObjRef,
     /// Longest side allowed for this image (the GPU's texture limit).
     max_side: u32,
+    view: ViewOptions,
 }
 
 #[derive(Default)]
@@ -187,6 +213,17 @@ impl<T: Clone> Renderer<T> {
     /// Ask for a page if it is neither ready nor on its way. Earlier requests
     /// in a frame are drawn first.
     pub fn request(&mut self, key: Key, doc: &Arc<Document>, page: ObjRef) {
+        self.request_with(key, doc, page, &ViewOptions::default());
+    }
+
+    /// [`Renderer::request`] with view options; `key.view` must be `view.key()`.
+    pub fn request_with(
+        &mut self,
+        key: Key,
+        doc: &Arc<Document>,
+        page: ObjRef,
+        view: &ViewOptions,
+    ) {
         if self.ready.contains_key(&key) || self.pending.contains(&key) {
             return;
         }
@@ -197,6 +234,7 @@ impl<T: Clone> Renderer<T> {
             doc: doc.clone(),
             page,
             max_side: self.max_side,
+            view: view.clone(),
         });
         cv.notify_one();
     }
@@ -322,6 +360,8 @@ fn draw(job: &Job) -> Done {
     let dpi = dpi.clamp(1.0, 9600.0);
     let opts = folio_render::Options {
         dpi,
+        hidden_layers: job.view.hidden_layers.clone(),
+        replace_colors: job.view.replace_colors,
         ..Default::default()
     };
     match folio_render::render_page(&job.doc, job.page, &opts) {

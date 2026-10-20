@@ -48,6 +48,30 @@ pub enum Layout {
     SinglePage,
     /// Enable Scrolling: every page in one column.
     Continuous,
+    /// Two Page View: one spread at a time.
+    TwoPage,
+    /// Two Page Scrolling: spreads in one column.
+    TwoPageScrolling,
+}
+
+impl Layout {
+    pub fn two_up(self) -> bool {
+        matches!(self, Layout::TwoPage | Layout::TwoPageScrolling)
+    }
+
+    pub fn scrolls(self) -> bool {
+        matches!(self, Layout::Continuous | Layout::TwoPageScrolling)
+    }
+}
+
+/// Where one page sits in the page view: its left edge relative to the
+/// centre line, its top, and its size, in screen points.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Placed {
+    pub page: usize,
+    pub x: f32,
+    pub top: f32,
+    pub size: [f32; 2],
 }
 
 #[derive(Debug)]
@@ -81,6 +105,13 @@ pub struct Tab {
     /// Every page's text with positions, for Find and selection.
     pub index: crate::find::TextIndex,
     pub selection: Option<crate::find::Selection>,
+    /// Two Page View → Show Cover Page: the first page stands alone.
+    pub cover_page: bool,
+    /// The Layers panel's rows, and which layers are hidden now.
+    pub layers: Vec<folio_render::oc::Layer>,
+    pub hidden_layers: std::collections::BTreeSet<u32>,
+    /// What pages are drawn with (layers, replaced colours).
+    pub view: crate::cache::ViewOptions,
 }
 
 impl Tab {
@@ -111,7 +142,149 @@ impl Tab {
             id,
             index: crate::find::TextIndex::new(page_count),
             selection: None,
+            cover_page: false,
+            layers: Vec::new(),
+            hidden_layers: Default::default(),
+            view: Default::default(),
         }
+        .with_layers()
+    }
+
+    fn with_layers(mut self) -> Self {
+        self.layers = folio_render::oc::layers(&self.doc);
+        self.hidden_layers = folio_render::oc::default_hidden(&self.doc)
+            .into_iter()
+            .collect();
+        self
+    }
+
+    /// Show or hide a layer (the Layers panel's checkbox). Locked layers stay.
+    pub fn set_layer_visible(&mut self, ocg: u32, visible: bool) {
+        if self
+            .layers
+            .iter()
+            .any(|l| l.locked && l.ocg.map(|r| r.num) == Some(ocg))
+        {
+            return;
+        }
+        if visible {
+            self.hidden_layers.remove(&ocg);
+        } else {
+            self.hidden_layers.insert(ocg);
+        }
+        self.refresh_view(self.view.replace_colors);
+    }
+
+    /// Back to the document's default layer state (Layers → Reset to Initial Visibility).
+    pub fn reset_layers(&mut self) {
+        self.hidden_layers = folio_render::oc::default_hidden(&self.doc)
+            .into_iter()
+            .collect();
+        self.refresh_view(self.view.replace_colors);
+    }
+
+    /// Recompute the drawing options after a layer or colour change.
+    pub fn refresh_view(&mut self, replace: Option<folio_render::ReplaceColors>) {
+        let default: std::collections::BTreeSet<u32> = folio_render::oc::default_hidden(&self.doc)
+            .into_iter()
+            .collect();
+        self.view = crate::cache::ViewOptions {
+            hidden_layers: (self.hidden_layers != default)
+                .then(|| self.hidden_layers.iter().copied().collect()),
+            replace_colors: replace,
+        };
+    }
+
+    /// The pages shown together: one per spread, or two in Two Page layouts.
+    pub fn spreads(&self) -> Vec<Vec<usize>> {
+        let n = self.pages.len();
+        if !self.layout.two_up() {
+            return (0..n).map(|i| vec![i]).collect();
+        }
+        let mut out = Vec::with_capacity(n / 2 + 1);
+        let mut i = 0;
+        if self.cover_page && n > 0 {
+            out.push(vec![0]);
+            i = 1;
+        }
+        while i < n {
+            out.push((i..(i + 2).min(n)).collect());
+            i += 2;
+        }
+        out
+    }
+
+    fn spread_index(&self, page: usize) -> usize {
+        if !self.layout.two_up() {
+            return page;
+        }
+        if self.cover_page {
+            page.div_ceil(2)
+        } else {
+            page / 2
+        }
+    }
+
+    /// Every page's place in the view at `scale`, plus the content's total
+    /// height and width. Non-scrolling layouts show only the current spread.
+    pub fn placements(&self, scale: f32) -> (Vec<Placed>, f32, f32) {
+        let spreads = self.spreads();
+        let cur = self
+            .spread_index(self.current)
+            .min(spreads.len().saturating_sub(1));
+        let chosen: Vec<&Vec<usize>> = if self.layout.scrolls() {
+            spreads.iter().collect()
+        } else {
+            spreads.get(cur).into_iter().collect()
+        };
+        // In two-up layouts both columns are as wide as the widest page.
+        let column = if self.layout.two_up() {
+            chosen
+                .iter()
+                .flat_map(|s| s.iter())
+                .map(|&p| self.display_size(p, scale)[0])
+                .fold(0.0f32, f32::max)
+        } else {
+            0.0
+        };
+        let mut out = Vec::new();
+        let mut y = PAGE_GAP;
+        let mut width = 0.0f32;
+        for spread in chosen {
+            let mut row_h = 0.0f32;
+            for (k, &p) in spread.iter().enumerate() {
+                let size = self.display_size(p, scale);
+                let x = if !self.layout.two_up() {
+                    -size[0] / 2.0
+                } else {
+                    // A spread's single page is the cover (right) or the last (left).
+                    let right = if spread.len() == 1 {
+                        self.cover_page && p == 0
+                    } else {
+                        k == 1
+                    };
+                    if right {
+                        PAGE_GAP / 2.0
+                    } else {
+                        -PAGE_GAP / 2.0 - size[0]
+                    }
+                };
+                row_h = row_h.max(size[1]);
+                width = width.max(if self.layout.two_up() {
+                    2.0 * column + PAGE_GAP
+                } else {
+                    size[0]
+                });
+                out.push(Placed {
+                    page: p,
+                    x,
+                    top: y,
+                    size,
+                });
+            }
+            y += row_h + PAGE_GAP;
+        }
+        (out, y, width + 2.0 * PAGE_GAP)
     }
 
     pub fn page_count(&self) -> usize {
@@ -133,7 +306,7 @@ impl Tab {
     /// Screen points per PDF point for the current zoom in a window of
     /// `viewport` screen points. Fit modes fit the current page, as Acrobat does.
     pub fn scale(&self, viewport: [f32; 2]) -> f32 {
-        let [w, h] = self.display_size(self.fit_ref, 1.0);
+        let [w, h] = self.fit_size();
         let avail_w = (viewport[0] - 2.0 * PAGE_GAP).max(1.0);
         let avail_h = (viewport[1] - 2.0 * PAGE_GAP).max(1.0);
         let s = match self.zoom {
@@ -143,6 +316,32 @@ impl Tab {
         };
         let s = if s.is_finite() { s } else { PX_PER_PT };
         s.clamp(MIN_ZOOM / 100.0 * PX_PER_PT, MAX_ZOOM / 100.0 * PX_PER_PT)
+    }
+
+    /// The size Fit Page / Fit Width measure at 100%: the reference page, or
+    /// its whole spread in Two Page layouts.
+    fn fit_size(&self) -> [f32; 2] {
+        if !self.layout.two_up() {
+            return self.display_size(self.fit_ref, 1.0);
+        }
+        let spreads = self.spreads();
+        let idx = self
+            .spread_index(self.fit_ref)
+            .min(spreads.len().saturating_sub(1));
+        let column = spreads
+            .iter()
+            .flatten()
+            .map(|&p| self.display_size(p, 1.0)[0])
+            .fold(1.0f32, f32::max);
+        let h = spreads
+            .get(idx)
+            .map(|s| {
+                s.iter()
+                    .map(|&p| self.display_size(p, 1.0)[1])
+                    .fold(1.0f32, f32::max)
+            })
+            .unwrap_or(1.0);
+        [2.0 * column + PAGE_GAP, h]
     }
 
     /// The magnification in percent, as the zoom box shows it.
@@ -221,11 +420,37 @@ impl Tab {
     }
 
     pub fn next_page(&mut self) {
+        if self.layout.two_up() {
+            let spreads = self.spreads();
+            let i = self.spread_index(self.current);
+            if let Some(next) = spreads.get(i + 1).and_then(|s| s.first()) {
+                self.go_to(*next);
+            }
+            return;
+        }
         self.go_to(self.current.saturating_add(1));
     }
 
     pub fn previous_page(&mut self) {
+        if self.layout.two_up() {
+            let spreads = self.spreads();
+            let i = self.spread_index(self.current);
+            if let Some(prev) = i
+                .checked_sub(1)
+                .and_then(|k| spreads.get(k))
+                .and_then(|s| s.first())
+            {
+                self.go_to(*prev);
+            }
+            return;
+        }
         self.go_to(self.current.saturating_sub(1));
+    }
+
+    /// Show Cover Page in Two Page View.
+    pub fn set_cover_page(&mut self, on: bool) {
+        self.cover_page = on;
+        self.scroll_to = Some(self.current);
     }
 
     pub fn first_page(&mut self) {
