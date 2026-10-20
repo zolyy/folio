@@ -44,6 +44,37 @@ fn exercise_render(bytes: &[u8]) {
             }
         }
     }
+    // Stage 4c: layers (all hidden, then all shown) and replaced colours.
+    let all: Vec<u32> = folio_render::oc::all_groups(&doc)
+        .iter()
+        .map(|r| r.num)
+        .collect();
+    let _ = folio_render::oc::layers(&doc);
+    for (hidden, replace) in [
+        (Some(all.clone()), None),
+        (
+            Some(Vec::new()),
+            Some(folio_render::ReplaceColors::HIGH_CONTRAST[0].1),
+        ),
+        (
+            None,
+            Some(folio_render::ReplaceColors {
+                line_art: true,
+                only_black: true,
+                ..folio_render::ReplaceColors::HIGH_CONTRAST[2].1
+            }),
+        ),
+    ] {
+        for &p in pages.iter().take(2) {
+            let opts = Options {
+                dpi: 9.0,
+                hidden_layers: hidden.clone().map(Into::into),
+                replace_colors: replace,
+                ..Options::default()
+            };
+            let _ = folio_render::render_page(&doc, p, &opts);
+        }
+    }
     // Stage 4b: page text, Find, highlight quads and selection.
     for &p in pages.iter().take(4) {
         let Ok(t) = folio_render::page_text(&doc, p) else {

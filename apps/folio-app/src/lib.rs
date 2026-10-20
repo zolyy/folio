@@ -6,9 +6,32 @@ pub mod app;
 pub mod cache;
 pub mod find;
 pub mod icons;
+pub mod panels;
 pub mod viewer;
 
 use std::path::PathBuf;
+
+/// Text from a document as the window can show it: control characters
+/// become spaces and characters the window's fonts cannot draw become '?'.
+/// Titles, labels and names in PDFs can hold anything.
+pub fn drawable(ctx: &eframe::egui::Context, s: &str) -> String {
+    use eframe::egui::FontId;
+    let (p, m) = (FontId::proportional(14.0), FontId::monospace(14.0));
+    ctx.fonts_mut(|f| {
+        s.chars()
+            .take(4096)
+            .map(|c| {
+                if c.is_control() {
+                    ' '
+                } else if f.has_glyph(&p, c) && f.has_glyph(&m, c) {
+                    c
+                } else {
+                    '?'
+                }
+            })
+            .collect()
+    })
+}
 
 /// Where per-user settings live: `%APPDATA%\Folio` on Windows,
 /// `~/Library/Application Support/Folio` on macOS, `$XDG_CONFIG_HOME/folio`

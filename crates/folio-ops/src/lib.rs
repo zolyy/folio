@@ -7,7 +7,9 @@
 //! Every operation takes a [`Document`], returns a [`Result`], and never
 //! panics on damaged input (`AGENTS.md` §3).
 
+pub mod attachments;
 pub mod compress;
+pub mod fonts;
 pub mod info;
 pub mod json;
 pub mod labels;

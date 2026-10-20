@@ -20,3 +20,6 @@ clap.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tiny-skia = "0.12"

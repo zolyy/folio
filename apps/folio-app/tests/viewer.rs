@@ -259,6 +259,7 @@ fn key(page: usize, width: u32, rotation: u16) -> Key {
         page,
         width,
         rotation,
+        view: 0,
     }
 }
 

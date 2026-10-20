@@ -210,6 +210,12 @@ struct Ctx<'a> {
     text: Vec<crate::text::Glyph>,
     /// Device pixels per point.
     px_per_pt: f32,
+    /// Optional content (layers) currently in force.
+    vis: crate::oc::Visibility<'a>,
+    /// Above zero inside hidden optional content: nothing is painted.
+    suppress: usize,
+    /// True while glyphs are drawn (Replace Document Colors).
+    painting_text: bool,
 }
 
 pub fn render(doc: &Document, page: ObjRef, opts: &Options) -> Result<Rendered> {
@@ -220,7 +226,10 @@ pub fn render(doc: &Document, page: ObjRef, opts: &Options) -> Result<Rendered> 
             geo.width, geo.height
         ))
     })?;
-    if opts.white_background {
+    if let Some(rc) = opts.replace_colors {
+        let [r, g, b] = rc.background;
+        pixmap.fill(Color::from_rgba8(r, g, b, 255));
+    } else if opts.white_background {
         pixmap.fill(Color::WHITE);
     }
     let mut ctx = Ctx {
@@ -238,6 +247,9 @@ pub fn render(doc: &Document, page: ObjRef, opts: &Options) -> Result<Rendered> 
         pattern_depth: 0,
         text: Vec::new(),
         px_per_pt: (opts.dpi / 72.0) as f32,
+        vis: crate::oc::Visibility::new(doc, opts.hidden_layers.as_deref()),
+        suppress: 0,
+        painting_text: false,
     };
     let res = doc
         .page_attr(page, b"Resources")
@@ -318,6 +330,7 @@ impl Ctx<'_> {
         let mut cur = (0.0f32, 0.0f32);
         let mut pending_clip: Option<FillRule> = None;
         let mut operands: Vec<Object> = Vec::new();
+        let mut mc: Vec<bool> = Vec::new();
         let mut tm = Transform::identity();
         let mut tlm = Transform::identity();
         let mut text_clip: Vec<tiny_skia::Path> = Vec::new();
@@ -545,6 +558,36 @@ impl Ctx<'_> {
                     p.lex.pos = end.1;
                     self.draw_image_dict(&d, &image, res, &gs, None);
                 }
+                b"BMC" => {
+                    if mc.len() < 4096 {
+                        mc.push(false);
+                    }
+                }
+                b"BDC" => {
+                    let hidden = operands.first().and_then(Object::as_name) == Some(b"OC")
+                        && match operands.get(1) {
+                            Some(Object::Name(nm)) => self
+                                .doc
+                                .resolve_key(res, b"Properties")
+                                .and_then(Object::as_dict)
+                                .and_then(|p| p.get(nm))
+                                .cloned()
+                                .is_some_and(|o| !self.vis.visible(&o)),
+                            Some(o @ Object::Dict(_)) => !self.vis.visible(o),
+                            _ => false,
+                        };
+                    if mc.len() < 4096 {
+                        if hidden {
+                            self.suppress += 1;
+                        }
+                        mc.push(hidden);
+                    }
+                }
+                b"EMC" => {
+                    if mc.pop() == Some(true) {
+                        self.suppress = self.suppress.saturating_sub(1);
+                    }
+                }
                 b"sh" => {
                     if let Some(name) = operands.first().and_then(Object::as_name) {
                         let name = name.to_vec();
@@ -646,6 +689,12 @@ impl Ctx<'_> {
             }
             operands.clear();
         }
+        // Marked content left open by this stream ends with it.
+        for hidden in mc {
+            if hidden {
+                self.suppress = self.suppress.saturating_sub(1);
+            }
+        }
     }
 
     fn color(&mut self, cs: &ColorSpace, comps: &[f64], alpha: f32) -> Option<Color> {
@@ -656,6 +705,14 @@ impl Ctx<'_> {
             return Some(c);
         }
         let [r, g, b] = cs.to_rgb(comps)?;
+        if let Some(rc) = self.opts.replace_colors
+            && (self.painting_text || rc.line_art)
+            && (!rc.only_black || r.max(g).max(b) < 0.25)
+        {
+            let [tr, tg, tb] = rc.text;
+            let f = |v: u8| f32::from(v) / 255.0;
+            return Color::from_rgba(f(tr), f(tg), f(tb), alpha.clamp(0.0, 1.0));
+        }
         Color::from_rgba(r, g, b, alpha.clamp(0.0, 1.0))
     }
 
@@ -670,6 +727,9 @@ impl Ctx<'_> {
     }
 
     fn fill(&mut self, path: &tiny_skia::Path, rule: FillRule, gs: &GState) {
+        if self.suppress > 0 {
+            return;
+        }
         if matches!(*gs.fill_cs, ColorSpace::Pattern(_)) {
             self.paint_pattern(path, rule, gs.ctm, gs, false);
             return;
@@ -687,6 +747,9 @@ impl Ctx<'_> {
     }
 
     fn stroke(&mut self, path: &tiny_skia::Path, gs: &GState) {
+        if self.suppress > 0 {
+            return;
+        }
         let pattern = matches!(*gs.stroke_cs, ColorSpace::Pattern(_));
         let color = if pattern {
             Color::BLACK
@@ -883,6 +946,20 @@ impl Ctx<'_> {
         clip: &mut Vec<tiny_skia::Path>,
         depth: usize,
     ) {
+        let was = std::mem::replace(&mut self.painting_text, true);
+        self.show_glyphs(bytes, tm, gs, res, clip, depth);
+        self.painting_text = was;
+    }
+
+    fn show_glyphs(
+        &mut self,
+        bytes: &[u8],
+        tm: &mut Transform,
+        gs: &GState,
+        res: &Dict,
+        clip: &mut Vec<tiny_skia::Path>,
+        depth: usize,
+    ) {
         let Some(font) = gs.font.clone() else {
             self.skip("text without a font");
             return;
@@ -895,7 +972,7 @@ impl Ctx<'_> {
         let stroke = matches!(mode, 1 | 2 | 5 | 6);
         let to_clip = mode >= 4;
         let pattern_fill = fill && matches!(*gs.fill_cs, ColorSpace::Pattern(_));
-        let fill_paint = if fill && font.type3.is_none() && !pattern_fill {
+        let fill_paint = if fill && self.suppress == 0 && font.type3.is_none() && !pattern_fill {
             self.color(&gs.fill_cs.clone(), &gs.fill, gs.fill_alpha)
                 .map(|c| {
                     let mut p = Paint {
@@ -986,7 +1063,7 @@ impl Ctx<'_> {
             [p[0].x / s, p[0].y / s]
         };
         let quad = [map(0.0, -0.2), map(w, -0.2), map(w, 0.8), map(0.0, 0.8)];
-        if quad.iter().flatten().all(|v| v.is_finite()) {
+        if quad.iter().flatten().all(|v| v.is_finite()) && self.suppress == 0 {
             self.text.push(crate::text::Glyph { text, quad });
         }
     }
@@ -1024,6 +1101,9 @@ impl Ctx<'_> {
         gs: &GState,
         cache_key: Option<u32>,
     ) {
+        if self.suppress > 0 {
+            return;
+        }
         let doc = self.doc;
         let is_mask = matches!(
             dict.get(b"ImageMask").or_else(|| dict.get(b"IM")),
@@ -1112,6 +1192,12 @@ impl Ctx<'_> {
         let Some(Object::Stream(s)) = doc.get(r) else {
             return;
         };
+        // Optional content: an XObject in a hidden layer is not drawn.
+        if let Some(oc) = s.dict.get(b"OC").cloned()
+            && !self.vis.visible(&oc)
+        {
+            return;
+        }
         match s.dict.get_name(b"Subtype") {
             Some(b"Image") => {
                 let (dict, data) = (s.dict.clone(), s.data.clone());
@@ -1249,6 +1335,9 @@ impl Ctx<'_> {
 
     /// The `sh` operator: paint a shading over the current clip (§8.7.4.2).
     fn sh(&mut self, res: &Dict, name: &[u8], gs: &GState) {
+        if self.suppress > 0 {
+            return;
+        }
         let doc = self.doc;
         let Some(o) = doc
             .resolve_key(res, b"Shading")
@@ -1306,6 +1395,9 @@ impl Ctx<'_> {
         gs: &GState,
         stroke_side: bool,
     ) {
+        if self.suppress > 0 {
+            return;
+        }
         let doc = self.doc;
         let pat = if stroke_side {
             gs.stroke_pattern.clone()
@@ -1559,6 +1651,11 @@ impl Ctx<'_> {
             let flags = ad.get_int(b"F").unwrap_or(0);
             // Hidden (bit 2) and NoView (bit 6).
             if flags & (2 | 32) != 0 || ad.get_name(b"Subtype") == Some(b"Popup") {
+                continue;
+            }
+            if let Some(oc) = ad.get(b"OC").cloned()
+                && !self.vis.visible(&oc)
+            {
                 continue;
             }
             let Some(ap) = doc.resolve_key(ad, b"AP").and_then(Object::as_dict) else {

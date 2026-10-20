@@ -1331,6 +1331,7 @@ dependencies = [
  "folio-core",
  "folio-ops",
  "folio-render",
+ "tiny-skia 0.12.0",
 ]
 
 [[package]]

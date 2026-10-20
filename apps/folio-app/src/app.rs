@@ -26,7 +26,6 @@ const MAX_FILE: u64 = folio_core::document::MAX_FILE;
 /// Thumbnail box in the navigation pane, in screen points.
 const THUMB_W: f32 = 104.0;
 const THUMB_H: f32 = 134.0;
-const THUMB_ROW: f32 = THUMB_H + 26.0;
 /// One arrow-key step in the page view, in screen points (Folio choice).
 const ARROW_STEP: f32 = 48.0;
 
@@ -43,6 +42,8 @@ pub enum Pane {
     Hidden,
     Thumbnails,
     Bookmarks,
+    Layers,
+    Attachments,
 }
 
 /// A protected document waiting for its password.
@@ -64,6 +65,8 @@ pub struct Config {
 }
 
 type Picker = Box<dyn FnMut() -> Vec<PathBuf>>;
+/// Asks where to save a file, given its suggested name; `None` = cancelled.
+type Saver = Box<dyn FnMut(&str) -> Option<PathBuf>>;
 
 pub struct App {
     pub tabs: Vec<Tab>,
@@ -89,6 +92,22 @@ pub struct App {
     wanted: HashSet<PageKey>,
     /// The Find bar (Ctrl+F).
     pub find: FindState,
+    /// Shows the system Save dialog (attachments); `None` in tests.
+    pub saver: Option<Saver>,
+    /// View → Full Screen Mode (Ctrl+L).
+    pub full_screen: bool,
+    /// View → Read Mode (Ctrl+H).
+    pub read_mode: bool,
+    /// Layout and zoom to restore when Full Screen Mode ends.
+    pub saved_view: Option<(Layout, Zoom)>,
+    /// File → Properties (Ctrl+D) and its open tab.
+    pub properties_open: bool,
+    pub properties_tab: usize,
+    /// Edit → Accessibility → Replace Document Colors.
+    pub colors_open: bool,
+    pub colors: crate::panels::ColorSettings,
+    /// Thumbnail size factor (Enlarge / Reduce Page Thumbnails).
+    pub thumb_scale: f32,
 }
 
 impl App {
@@ -128,6 +147,15 @@ impl App {
             title: String::new(),
             wanted: HashSet::new(),
             find: FindState::default(),
+            saver: None,
+            full_screen: false,
+            read_mode: false,
+            saved_view: None,
+            properties_open: false,
+            properties_tab: 0,
+            colors_open: false,
+            colors: Default::default(),
+            thumb_scale: 1.0,
         }
     }
 
@@ -340,7 +368,8 @@ impl App {
         }
         let id = self.next_id;
         self.next_id += 1;
-        let tab = Tab::new(doc, path, name, id);
+        let mut tab = Tab::new(doc, path, name, id);
+        tab.refresh_view(self.colors.replace());
         if tab.page_count() == 0 {
             self.message = Some(format!("{} has no pages to show.", tab.title));
         }
@@ -390,23 +419,34 @@ impl App {
         self.shortcuts(&ctx);
         self.wanted.clear();
 
-        Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
-        Panel::top("toolbar").show(ui, |ui| self.toolbar(ui));
-        if !self.tabs.is_empty() {
+        let chrome = !self.full_screen;
+        let bars = chrome && !self.read_mode;
+        if chrome {
+            Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
+        }
+        if bars {
+            Panel::top("toolbar").show(ui, |ui| self.toolbar(ui));
+        }
+        if bars && !self.tabs.is_empty() {
             Panel::top("tabs").show(ui, |ui| self.tab_bar(ui));
         }
-        if self.find.open && !self.tabs.is_empty() {
+        if chrome && self.find.open && !self.tabs.is_empty() {
             self.ensure_index();
             Panel::top("find").show(ui, |ui| self.find_bar(ui));
         }
-        Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
-        if self.pane != Pane::Hidden && !self.tabs.is_empty() {
+        if bars {
+            Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
+        }
+        if bars && self.pane != Pane::Hidden && !self.tabs.is_empty() {
+            let w = THUMB_W * self.thumb_scale;
             Panel::left("pane")
                 .resizable(true)
-                .default_size(THUMB_W + 48.0)
+                .default_size(w + 48.0)
                 .min_size(THUMB_W + 24.0)
                 .show(ui, |ui| match self.pane {
                     Pane::Thumbnails => self.thumbnails(ui),
+                    Pane::Layers => self.layers_pane(ui),
+                    Pane::Attachments => self.attachments_pane(ui),
                     _ => self.bookmarks(ui),
                 });
         }
@@ -420,6 +460,8 @@ impl App {
             .show(ui, |ui| self.page_view(ui));
 
         self.password_dialog(&ctx);
+        self.properties_dialog(&ctx);
+        self.colors_dialog(&ctx);
         self.renderer.retain(&self.wanted);
         self.update_title(&ctx);
     }
@@ -504,6 +546,19 @@ impl App {
         }
         if take(cmd, Key::W) {
             self.close_tab(self.active);
+        }
+        if take(cmd, Key::L) {
+            let on = !self.full_screen;
+            self.set_full_screen(ctx, on);
+        }
+        if self.full_screen && !self.find.open && take(Modifiers::NONE, Key::Escape) {
+            self.set_full_screen(ctx, false);
+        }
+        if take(cmd, Key::H) {
+            self.toggle_read_mode();
+        }
+        if take(cmd, Key::D) && !self.tabs.is_empty() {
+            self.properties_open = true;
         }
         if take(Modifiers::NONE, Key::F4) {
             self.pane = match self.pane {
@@ -603,6 +658,8 @@ impl App {
 
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
         let vp = self.viewport;
+        let mut go_full = false;
+        let mut go_read = false;
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
                 if ui
@@ -641,6 +698,16 @@ impl App {
                     ui.close();
                     self.close_tab(self.active);
                 }
+                if ui
+                    .add_enabled(
+                        !self.tabs.is_empty(),
+                        egui::Button::new("Properties…").shortcut_text("Ctrl+D"),
+                    )
+                    .clicked()
+                {
+                    ui.close();
+                    self.properties_open = true;
+                }
                 ui.separator();
                 if ui.button("Exit").clicked() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
@@ -670,6 +737,14 @@ impl App {
                         .clicked()
                     {
                         self.open_find();
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui
+                        .button("Accessibility: Replace Document Colors…")
+                        .clicked()
+                    {
+                        self.colors_open = true;
                         ui.close();
                     }
                 });
@@ -764,13 +839,43 @@ impl App {
                         let mut layout = t.layout;
                         ui.radio_value(&mut layout, Layout::SinglePage, "Single Page View");
                         ui.radio_value(&mut layout, Layout::Continuous, "Enable Scrolling");
+                        ui.radio_value(&mut layout, Layout::TwoPage, "Two Page View");
+                        ui.radio_value(&mut layout, Layout::TwoPageScrolling, "Two Page Scrolling");
                         if layout != t.layout {
                             t.set_layout(layout);
                         }
+                        ui.separator();
+                        let mut cover = t.cover_page;
+                        if ui
+                            .add_enabled(
+                                t.layout.two_up(),
+                                egui::Checkbox::new(&mut cover, "Show Cover Page in Two Page View"),
+                            )
+                            .changed()
+                        {
+                            t.set_cover_page(cover);
+                        }
                     });
+                    ui.separator();
+                    if ui
+                        .add(egui::Button::new("Full Screen Mode").shortcut_text("Ctrl+L"))
+                        .clicked()
+                    {
+                        go_full = true;
+                        ui.close();
+                    }
+                    if ui
+                        .add(egui::Button::new("Read Mode").shortcut_text("Ctrl+H"))
+                        .clicked()
+                    {
+                        go_read = true;
+                        ui.close();
+                    }
                     ui.menu_button("Show/Hide", |ui| {
                         ui.radio_value(&mut self.pane, Pane::Thumbnails, "Page Thumbnails");
                         ui.radio_value(&mut self.pane, Pane::Bookmarks, "Bookmarks");
+                        ui.radio_value(&mut self.pane, Pane::Layers, "Layers");
+                        ui.radio_value(&mut self.pane, Pane::Attachments, "Attachments");
                         ui.radio_value(&mut self.pane, Pane::Hidden, "Hide Navigation Pane (F4)");
                     });
                 });
@@ -791,6 +896,13 @@ impl App {
                 ui.label("An open-source PDF workbench. MIT OR Apache-2.0.");
             });
         });
+        if go_full {
+            let ctx = ui.ctx().clone();
+            self.set_full_screen(&ctx, true);
+        }
+        if go_read {
+            self.toggle_read_mode();
+        }
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui) {
@@ -826,7 +938,7 @@ impl App {
                 t.go_to_text(&self.page_box);
             }
             if !page_edit.has_focus() {
-                self.page_box = t.page_name(t.current);
+                self.page_box = crate::drawable(ui.ctx(), &t.page_name(t.current));
             }
             if t.labels.is_some() {
                 ui.label(format!("({} of {n})", t.current + 1));
@@ -951,11 +1063,12 @@ impl App {
                 if !t.repairs.is_empty() {
                     ui.separator();
                     ui.label(format!("Repaired: {} problem(s)", t.repairs.len()))
-                        .on_hover_text(t.repairs.join("\n"));
+                        .on_hover_text(crate::drawable(ui.ctx(), &t.repairs.join("\n")));
                 }
             }
             if let Some(m) = self.message.clone() {
                 ui.separator();
+                let m = crate::drawable(ui.ctx(), &m);
                 ui.colored_label(ui.visuals().error_fg_color, m);
                 if ui.small_button("Dismiss").clicked() {
                     self.message = None;
@@ -967,7 +1080,26 @@ impl App {
     // ---- navigation pane -------------------------------------------------
 
     fn thumbnails(&mut self, ui: &mut egui::Ui) {
-        ui.strong("Page Thumbnails");
+        ui.horizontal(|ui| {
+            ui.strong("Page Thumbnails");
+            if ui
+                .small_button("−")
+                .on_hover_text("Reduce Page Thumbnails")
+                .clicked()
+            {
+                self.thumb_scale = (self.thumb_scale / 1.25).max(0.5);
+            }
+            if ui
+                .small_button("+")
+                .on_hover_text("Enlarge Page Thumbnails")
+                .clicked()
+            {
+                self.thumb_scale = (self.thumb_scale * 1.25).min(3.0);
+            }
+        });
+        let k = self.thumb_scale;
+        let (thumb_w, thumb_h) = (THUMB_W * k, THUMB_H * k);
+        let thumb_row = thumb_h + 26.0;
         let ppp = ui.ctx().pixels_per_point();
         let Self {
             tabs,
@@ -984,24 +1116,24 @@ impl App {
             .id_salt(("thumbs", t.id))
             .auto_shrink([false, false]);
         if t.scroll_to.is_some() {
-            area = area.vertical_scroll_offset((t.current as f32 - 1.0).max(0.0) * THUMB_ROW);
+            area = area.vertical_scroll_offset((t.current as f32 - 1.0).max(0.0) * thumb_row);
         }
         let mut go = None;
-        area.show_rows(ui, THUMB_ROW, n, |ui, rows| {
+        area.show_rows(ui, thumb_row, n, |ui, rows| {
             for i in rows {
                 let (row, resp) = ui.allocate_exact_size(
-                    Vec2::new(ui.available_width(), THUMB_ROW),
+                    Vec2::new(ui.available_width(), thumb_row),
                     Sense::click(),
                 );
-                let name = t.page_name(i);
+                let name = crate::drawable(ui.ctx(), &t.page_name(i));
                 resp.widget_info(|| {
                     WidgetInfo::labeled(Role::Button, true, format!("Page {name}"))
                 });
                 let [w, h] = t.display_size(i, 1.0);
-                let s = (THUMB_W / w).min(THUMB_H / h);
+                let s = (thumb_w / w).min(thumb_h / h);
                 let size = Vec2::new(w * s, h * s);
                 let rect = Rect::from_center_size(
-                    Pos2::new(row.center().x, row.top() + 4.0 + THUMB_H / 2.0),
+                    Pos2::new(row.center().x, row.top() + 4.0 + thumb_h / 2.0),
                     size,
                 );
                 let key = page_key(t, i, size.x * ppp, renderer.max_side());
@@ -1094,31 +1226,22 @@ impl App {
             return;
         }
         let scale = t.scale([size.x, size.y]);
-        let (tops, total) = match t.layout {
-            Layout::Continuous => t.page_tops(scale),
-            Layout::SinglePage => {
-                let h = t.display_size(t.current, scale)[1];
-                (vec![PAGE_GAP], h + 2.0 * PAGE_GAP)
-            }
-        };
-        let pages: Vec<usize> = match t.layout {
-            Layout::Continuous => (0..t.page_count()).collect(),
-            Layout::SinglePage => vec![t.current],
-        };
-        let widest = pages
-            .iter()
-            .map(|&i| t.display_size(i, scale)[0])
-            .fold(0.0f32, f32::max);
-        let content_w = (widest + 2.0 * PAGE_GAP).max(size.x);
+        let (placed, total, width) = t.placements(scale);
+        let content_w = width.max(size.x);
         let mut area = ScrollArea::both()
-            .id_salt(("pages", t.id, t.layout == Layout::SinglePage))
+            .id_salt(("pages", t.id, t.layout.scrolls()))
             // Mouse drags select text (egui only drag-scrolls on touch screens).
             .auto_shrink([false, false]);
         let jump = t.scroll_to.take();
         if let Some(p) = jump {
-            let y = match t.layout {
-                Layout::Continuous => tops.get(p).copied().unwrap_or(0.0) - PAGE_GAP,
-                Layout::SinglePage => 0.0,
+            let y = if t.layout.scrolls() {
+                placed
+                    .iter()
+                    .find(|pl| pl.page == p)
+                    .map(|pl| pl.top - PAGE_GAP)
+                    .unwrap_or(0.0)
+            } else {
+                0.0
             };
             area = area.vertical_scroll_offset(y.max(0.0));
         }
@@ -1128,37 +1251,38 @@ impl App {
             }
             let origin = ui.max_rect().min;
             ui.set_min_size(Vec2::new(content_w, total));
-            let first = t
-                .page_at(&tops, visible.top())
-                .min(pages.len().saturating_sub(1));
-            let mut shown = Vec::new();
+            let center = content_w / 2.0;
+            // Placements are sorted by top: skip to the first visible row.
+            let first = placed
+                .partition_point(|pl| pl.top + pl.size[1] < visible.top())
+                .min(placed.len().saturating_sub(1));
+            let mut shown: Vec<usize> = Vec::new();
             let mut layers: Vec<(usize, Rect)> = Vec::new();
             let mut dragging = false;
-            for (slot, &i) in pages.iter().enumerate().skip(first) {
-                let top = tops.get(slot).copied().unwrap_or(0.0);
-                if top > visible.bottom() {
+            for (slot, pl) in placed.iter().enumerate().skip(first) {
+                if pl.top > visible.bottom() {
                     break;
                 }
-                shown.push((slot, i, top));
-            }
-            for &(_, i, top) in &shown {
-                let [w, h] = t.display_size(i, scale);
+                shown.push(slot);
                 let rect = Rect::from_min_size(
-                    origin + Vec2::new((content_w - w) / 2.0, top),
-                    Vec2::new(w, h),
+                    origin + Vec2::new(center + pl.x, pl.top),
+                    Vec2::new(pl.size[0], pl.size[1]),
                 );
-                let key = page_key(t, i, w * ppp, renderer.max_side());
-                paint_page(ui, renderer, wanted, t, i, key, rect);
-                if text_layer(ui, t, find, i, rect, scale) {
+                let key = page_key(t, pl.page, pl.size[0] * ppp, renderer.max_side());
+                paint_page(ui, renderer, wanted, t, pl.page, key, rect);
+                if text_layer(ui, t, find, pl.page, rect, scale) {
                     dragging = true;
                 }
-                layers.push((i, rect));
+                layers.push((pl.page, rect));
             }
             // A selection may run on into the next pages.
             if dragging
                 && let Some(pos) = ui.input(|inp| inp.pointer.interact_pos())
                 && let Some(&(page, rect)) = layers.iter().min_by(|a, b| {
-                    let d = |r: &Rect| (pos.y - r.center().y).abs() - r.height() / 2.0;
+                    let d = |r: &Rect| {
+                        (pos.y - r.center().y).abs() - r.height() / 2.0
+                            + ((pos.x - r.center().x).abs() - r.width() / 2.0).max(0.0)
+                    };
                     d(&a.1).total_cmp(&d(&b.1))
                 })
                 && let Some(text) = t.index.get(page)
@@ -1171,21 +1295,31 @@ impl App {
                 }
             }
             // Draw the next pages ahead of the scroll, once the visible ones are queued.
-            if t.layout == Layout::Continuous
-                && let Some(&(slot, _, _)) = shown.last()
+            if t.layout.scrolls()
+                && let Some(&last) = shown.last()
             {
-                for &i in pages.iter().skip(slot + 1).take(2) {
-                    let w = t.display_size(i, scale)[0];
-                    let key = page_key(t, i, w * ppp, renderer.max_side());
+                for pl in placed.iter().skip(last + 1).take(2) {
+                    let key = page_key(t, pl.page, pl.size[0] * ppp, renderer.max_side());
                     wanted.insert(key);
-                    if let Some(&p) = t.pages.get(i) {
-                        renderer.request(key, &t.doc, p);
+                    if let Some(&p) = t.pages.get(pl.page) {
+                        renderer.request_with(key, &t.doc, p, &t.view);
                     }
                 }
             }
             // The current page is the one in the middle of the window.
-            if jump.is_none() && t.layout == Layout::Continuous {
-                t.current = t.page_at(&tops, visible.center().y).min(t.page_count() - 1);
+            if jump.is_none() && t.layout.scrolls() {
+                let mid = visible.center().y;
+                let at = placed.partition_point(|pl| pl.top <= mid).saturating_sub(1);
+                if let Some(pl) = placed.get(at) {
+                    // In a spread, the first page of the row.
+                    let row_top = pl.top;
+                    let first_in_row = placed
+                        .iter()
+                        .find(|q| (q.top - row_top).abs() < 0.5)
+                        .map(|q| q.page)
+                        .unwrap_or(pl.page);
+                    t.current = first_in_row.min(t.page_count() - 1);
+                }
             }
         });
     }
@@ -1255,6 +1389,7 @@ fn page_key(t: &Tab, page: usize, width_px: f32, max_side: u32) -> PageKey {
         page,
         width: w.min(fit).clamp(1.0, MAX_SIDE as f32) as u32,
         rotation: t.rotation,
+        view: t.view.key(),
     }
 }
 
@@ -1271,7 +1406,7 @@ fn paint_page(
 ) {
     wanted.insert(key);
     if let Some(&p) = t.pages.get(page) {
-        renderer.request(key, &t.doc, p);
+        renderer.request_with(key, &t.doc, p, &t.view);
     }
     let painter = ui.painter();
     painter.rect_filled(
@@ -1307,12 +1442,12 @@ fn bookmark_level(
     for (i, n) in nodes.iter().enumerate() {
         let id = id.with(i);
         let title = if n.title.trim().is_empty() {
-            "(untitled)"
+            "(untitled)".to_string()
         } else {
-            n.title.as_str()
+            crate::drawable(ui.ctx(), &n.title)
         };
         let mut link = |ui: &mut egui::Ui| {
-            let r = ui.selectable_label(false, title);
+            let r = ui.selectable_label(false, title.as_str());
             if r.clicked()
                 && let Some(p) = n.page
             {

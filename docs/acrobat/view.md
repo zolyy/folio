@@ -31,9 +31,9 @@ drawn by Folio (`apps/folio-app/src/icons.rs`), no font or image asset and no Ad
 | Acrobat | Folio |
 |---|---|
 | Single Page View, Enable Scrolling (continuous) | 4a ✓ (default: Enable Scrolling, Fit Page — **Folio choice**) |
-| Two Page View, Two Page Scrolling, Show Cover Page | 4c |
-| Full Screen Mode (Ctrl+L) | 4c |
-| Read Mode (hide toolbars) | 4c |
+| Two Page View, Two Page Scrolling, Show Cover Page | ✔ 4c (spreads fit as a whole; Page Down moves a spread) |
+| Full Screen Mode (Ctrl+L, Esc to leave) | ✔ 4c (**Folio choice**: one fitted page, the previous view restored on exit) |
+| Read Mode (Ctrl+H: toolbars, tabs, panes and status bar hidden) | ✔ 4c |
 
 ## view.thumbnails, view.bookmarks — navigation panes
 
@@ -41,7 +41,7 @@ drawn by Folio (`apps/folio-app/src/icons.rs`), no font or image asset and no Ad
 |---|---|
 | Page Thumbnails panel, click to go, current page highlighted | 4a ✓ |
 | Bookmarks panel: tree, expand/collapse, click to go | 4a ✓ (initially open items from `/Count`) |
-| Enlarge / reduce thumbnails | 4c |
+| Enlarge / reduce thumbnails | ✔ 4c |
 
 ## view.search, view.select-copy
 
@@ -66,10 +66,10 @@ drawn by Folio (`apps/folio-app/src/icons.rs`), no font or image asset and no Ad
 
 | Acrobat | Folio |
 |---|---|
-| Layers panel: show / hide optional content | 4c |
-| Attachments panel: list, save | 4c |
-| Document Properties dialog (Ctrl+D) | 4c (same fields as `folio info`) |
-| Accessibility → Replace Document Colors (high contrast, custom) | 4c |
+| Layers panel: show / hide optional content, locked layers, Reset to Initial Visibility | ✔ 4c (also `folio layers`, `render --hide-layers/--show-layers`) |
+| Attachments panel: list (document and comment attachments), save | ✔ 4c (also `folio attachments`) |
+| Document Properties dialog (Ctrl+D): Description, Security, Fonts | ✔ 4c; Initial View and Custom tabs in stage 7 (also `folio info`, `folio fonts`) |
+| Accessibility → Replace Document Colors (high contrast, custom, only black, line art) | ✔ 4c (**Folio choice**: under Edit; no Windows colour scheme option yet) |
 
 ## Agents and automated testing
 

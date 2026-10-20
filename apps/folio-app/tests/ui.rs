@@ -87,6 +87,7 @@ fn opens_a_document_in_a_tab_and_draws_its_pages() {
         page: 0,
         width: 1,
         rotation: 0,
+        view: 0,
     };
     let mut app = h.into_state();
     match app.renderer.get(key) {
@@ -407,6 +408,7 @@ fn extreme_zoom_stays_within_the_display_texture_limit() {
         page: 0,
         width: limit,
         rotation: 270,
+        view: 0,
     };
     match app.renderer.get(key) {
         Some((k, Shown::Texture(tex))) => {

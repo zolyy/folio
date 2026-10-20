@@ -32,16 +32,16 @@ notes = "Stage 4a: first/previous/next/last page, page box with page labels, Acr
 [[feature]]
 id = "view.layout"
 name = "O pagină / continuu / două pagini / prezentare (full screen)"
-status = "partial"
-evidence = ["scrolling_layout_stacks_pages_and_finds_the_current_one", "layout_switch_keeps_the_current_page", "rotate_view_and_page_display"]
-notes = "Stage 4a: Single Page View and Enable Scrolling. Missing (stage 4c): Two Page View, Two Page Scrolling, Show Cover Page, Full Screen Mode, Read Mode."
+status = "shipped"
+evidence = ["two_page_view_pairs_pages_and_steps_by_spread", "show_cover_page_puts_the_first_page_alone_on_the_right", "fit_page_fits_the_whole_spread", "full_screen_hides_the_chrome_and_esc_restores_the_view", "read_mode_hides_toolbars_and_panes"]
+notes = "Single Page View, Enable Scrolling, Two Page View, Two Page Scrolling, Show Cover Page; Full Screen Mode (Ctrl+L, Esc) and Read Mode (Ctrl+H). Folio choice: Full Screen shows one fitted page and restores the previous view on exit; no full-screen transitions yet (stage 14)."
 
 [[feature]]
 id = "view.thumbnails"
 name = "Panou miniaturi"
-status = "partial"
-evidence = ["thumbnails_go_to_their_page", "renderer_draws_in_the_background_at_the_asked_width", "renderer_drops_requests_scrolled_away"]
-notes = "Stage 4a: Page Thumbnails panel with page labels, current page highlighted, click to go; drawn in the background. Missing: enlarge/reduce thumbnails (stage 4c), page operations from thumbnails (stage 5)."
+status = "shipped"
+evidence = ["thumbnails_go_to_their_page", "thumbnails_can_be_enlarged_and_reduced"]
+notes = "Page Thumbnails panel with page labels, current page highlighted, click to go, enlarge and reduce. Page operations from thumbnails belong to organize.* in the app (stage 5)."
 
 [[feature]]
 id = "view.bookmarks"
@@ -67,12 +67,16 @@ notes = "Drag to select text across pages, Copy, Select All, Edit menu; copy hon
 [[feature]]
 id = "view.layers"
 name = "Straturi (Optional Content Groups) — afișare/ascundere"
-status = "planned"
+status = "shipped"
+evidence = ["layers_panel_lists_order_default_state_and_locks", "hidden_layers_are_not_drawn", "layer_visibility_changes_what_is_drawn_and_locks_hold", "layers_pane_toggles_a_layer", "cli_render_shows_and_hides_layers_by_name"]
+notes = "Layers panel in /Order with titles and nesting, default state, locked layers, Reset to Initial Visibility; OCG and OCMD (incl. visibility expressions) in content, XObjects and annotations; folio layers and render --hide-layers/--show-layers. Layer changes are not saved into the file (as in Acrobat by default)."
 
 [[feature]]
 id = "view.attachments"
 name = "Fișiere atașate — listare, extragere"
-status = "planned"
+status = "shipped"
+evidence = ["attachments_panel_lists_document_and_comment_files", "attachments_pane_lists_and_saves", "cli_layers_attachments_and_fonts"]
+notes = "Document-level and comment attachments with description, size and page; save to disk from the panel or folio attachments --save. Adding or deleting attachments comes with editing (stage 7)."
 
 [[feature]]
 id = "view.tabs"
@@ -84,7 +88,9 @@ notes = "Stage 4a: one tab per document, Ctrl+Tab / Ctrl+Shift+Tab, Ctrl+W, Wind
 [[feature]]
 id = "view.night-mode"
 name = "Mod întunecat / culori de citire înlocuite"
-status = "planned"
+status = "shipped"
+evidence = ["replace_document_colors_background_and_line_art", "replace_document_colors_reaches_every_tab", "colors_dialog_opens_from_the_edit_menu"]
+notes = "Accessibility -> Replace Document Colors: the four high-contrast pairs or custom colours, only black text/line art, line art as well as text; images keep their colours. Folio choice: the dialog sits under Edit; Acrobat also offers the Windows colour scheme."
 
 [[feature]]
 id = "view.read-aloud"
@@ -95,8 +101,8 @@ status = "planned"
 id = "view.properties"
 name = "Proprietăți document: metadate, fonturi, versiune, securitate"
 status = "partial"
-evidence = ["properties_show_acrobat_description_and_advanced_fields", "cli_info_shows_document_properties"]
-notes = "Description and Advanced fields via folio info. Missing: custom properties (stage 7), the dialog itself (stage 4)."
+evidence = ["properties_show_acrobat_description_and_advanced_fields", "cli_info_shows_document_properties", "document_properties_dialog_shows_description_security_and_fonts", "fonts_tab_lists_type_encoding_and_embedding"]
+notes = "Document Properties dialog (Ctrl+D) with Description, Security and Fonts tabs; folio info and folio fonts. Missing: Initial View and Custom tabs (stage 7), editing fields in the dialog (stage 7)."
 
 [[feature]]
 id = "organize.merge"
